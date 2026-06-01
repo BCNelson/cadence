@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run build
+      - name: Package frontend dist
+        run: tar -C frontend/dist -czf frontend-dist.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist.tar.gz
+          retention-days: 1
+
+  go-lint:
+    needs: frontend-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist
+      - name: Restore frontend dist
+        run: |
+          mkdir -p internal/web/dist
+          tar -xzf frontend-dist/frontend-dist.tar.gz -C internal/web/dist
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  go-test:
+    needs: frontend-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist
+      - name: Restore frontend dist
+        run: |
+          mkdir -p internal/web/dist
+          tar -xzf frontend-dist/frontend-dist.tar.gz -C internal/web/dist
+      - name: Test with coverage
+        run: |
+          mkdir -p coverage
+          go test -race -count=1 -timeout=300s -coverprofile=coverage/unit.raw -covermode=atomic ./...
+      - name: Filter coverage
+        run: |
+          if [ -f .coverignore ]; then
+            pattern=$(grep -v '^#' .coverignore | grep -v '^$' | paste -sd'|' -)
+            grep -v -E "$pattern" coverage/unit.raw > coverage/unit.out
+          else
+            cp coverage/unit.raw coverage/unit.out
+          fi
+      - name: Coverage summary
+        run: go tool cover -func=coverage/unit.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage/unit.out
+          retention-days: 30

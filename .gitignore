@@ -1,0 +1,32 @@
+# Devenv / Nix
+.devenv/
+.direnv/
+result
+result-*
+
+# Go
+/tmp/
+/bin/
+/cadence
+*.exe
+*.test
+*.out
+
+
+# Node
+node_modules/
+dist/
+
+# Playwright
+frontend/playwright-report/
+frontend/test-results/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+coverage.out
+coverage.html

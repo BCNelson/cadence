@@ -1,0 +1,15 @@
+---
+title: Server options
+description: services.cadence.settings.server.* — HTTP listen address, UUID salt, base URL, management API keys.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+The `server` block configures the HTTP listener, the identity salt used to derive check UUIDs from slugs, and the management API key registry. `uuid_salt` is the only required field — everything else has sensible defaults.
+
+`uuid_salt` is treated as a secret. The generated settings file lives in the world-readable Nix store, so use one of:
+
+- `${env:CADENCE_UUID_SALT}` plus an [`environmentFile`](/cadence/nixos/options/general/#services-cadence-environmentfile), or
+- a YAML fragment passed via [`extraConfigFiles`](/cadence/nixos/options/general/#services-cadence-extraconfigfiles).
+
+<NixOptions prefix="services.cadence.settings.server" />

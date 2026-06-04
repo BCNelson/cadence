@@ -1,0 +1,10 @@
+---
+title: Defaults options
+description: services.cadence.settings.defaults.* — fallbacks applied to checks that don't set a field.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+Per-check fields override the corresponding default. The difference between "field absent" (inherit default) and "field set to `[]`" (no default applied) is preserved through the YAML emitter — setting `defaults.channels = ["ops"]` while a check sets `channels = []` means that check is genuinely silent, not inheriting `ops`.
+
+<NixOptions prefix="services.cadence.settings.defaults" />

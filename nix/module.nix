@@ -178,10 +178,12 @@ let
       grace = lib.mkOption {
         type = lib.types.nullOr durationType;
         default = null;
+        description = "Grace period before this check transitions to `down`. Overrides {option}`services.cadence.settings.defaults.grace`.";
       };
       timeout = lib.mkOption {
         type = lib.types.nullOr durationType;
         default = null;
+        description = "Maximum runtime for a `/start`-opened run before it is treated as failed. Overrides {option}`services.cadence.settings.defaults.timeout`.";
       };
       ping_keys = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -196,6 +198,7 @@ let
       tags = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
+        description = "Arbitrary tags surfaced in the dashboard and `/api/v3` responses.";
       };
       enabled = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
@@ -220,26 +223,32 @@ let
       server = lib.mkOption {
         type = serverType;
         default = { };
+        description = "HTTP server, identity salt, and management API key configuration.";
       };
       retention = lib.mkOption {
         type = retentionType;
         default = { };
+        description = "Per-check retention limits for pings and events.";
       };
       ping_keys = lib.mkOption {
         type = lib.types.listOf pingKeyType;
         default = [ ];
+        description = "Named ping-key registry. Checks reference entries by `name`; rotating a secret is a one-line change here.";
       };
       defaults = lib.mkOption {
         type = defaultsType;
         default = { };
+        description = "Fallbacks applied to checks that don't set the corresponding field.";
       };
       channels = lib.mkOption {
         type = lib.types.listOf channelType;
         default = [ ];
+        description = "Notification channels referenced by checks via `channels`.";
       };
       checks = lib.mkOption {
         type = lib.types.listOf checkType;
         default = [ ];
+        description = "Health checks to monitor. Each entry's `slug` must be globally unique.";
       };
     };
   };

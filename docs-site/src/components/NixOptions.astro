@@ -1,0 +1,26 @@
+---
+import NixOption from './NixOption.astro';
+import { optionsWithPrefix } from '../data/options';
+
+interface Props {
+  prefix: string;
+}
+
+const { prefix } = Astro.props;
+const matched = optionsWithPrefix(prefix);
+---
+
+{matched.length === 0 ? (
+  <p><em>No options found under <code>{prefix}</code>. The options JSON may be stale — run <code>npm run sync-options</code> to regenerate.</em></p>
+) : (
+  <div class="nix-options">
+    {matched.map(option => <NixOption option={option} />)}
+  </div>
+)}
+
+<style>
+  .nix-options {
+    display: flex;
+    flex-direction: column;
+  }
+</style>

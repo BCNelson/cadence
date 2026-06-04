@@ -70,3 +70,15 @@ clean:
     rm -rf internal/web/dist
     mkdir -p internal/web/dist
     @echo '<!doctype html><html><body>Run just frontend</body></html>' > internal/web/dist/index.html
+
+# Build the NixOS options JSON consumed by the docs site
+docs-options:
+    cd docs-site && npm run sync-options
+
+# Local Astro dev server for the documentation site
+docs-dev:
+    cd docs-site && npm install && npm run dev
+
+# Production build of the documentation site into docs-site/dist
+docs:
+    cd docs-site && npm ci && npm run build

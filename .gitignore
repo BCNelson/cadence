@@ -30,3 +30,9 @@ frontend/test-results/
 coverage/
 coverage.out
 coverage.html
+
+# Docs site (Astro Starlight)
+docs-site/node_modules/
+docs-site/dist/
+docs-site/.astro/
+docs-site/src/data/nixos-options.json

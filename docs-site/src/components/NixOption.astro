@@ -1,0 +1,183 @@
+---
+import { Code } from '@astrojs/starlight/components';
+import { optionAnchor, type NixOption } from '../data/options';
+
+interface Props {
+  option: NixOption;
+}
+
+const { option } = Astro.props;
+const anchor = optionAnchor(option.name);
+
+function typePill(t: string): { label: string; tone: string } {
+  const lower = t.toLowerCase();
+  if (lower.startsWith('null or')) return { label: 'nullable', tone: 'muted' };
+  if (lower.includes('submodule')) return { label: 'submodule', tone: 'purple' };
+  if (lower.includes('list of')) return { label: 'list', tone: 'blue' };
+  if (lower.includes('attribute set')) return { label: 'attrs', tone: 'blue' };
+  if (lower.startsWith('one of')) return { label: 'enum', tone: 'orange' };
+  if (lower === 'boolean') return { label: 'bool', tone: 'green' };
+  if (lower === 'string') return { label: 'string', tone: 'green' };
+  if (lower.includes('integer')) return { label: 'int', tone: 'green' };
+  if (lower.includes('path')) return { label: 'path', tone: 'green' };
+  if (lower.includes('package')) return { label: 'package', tone: 'purple' };
+  return { label: t, tone: 'muted' };
+}
+
+const pill = typePill(option.type);
+const declaration = option.declarations[0];
+
+// Lightweight CommonMark-ish renderer tuned for the descriptions that
+// actually appear in nix/module.nix: paragraphs, inline code, and
+// `{option}`path`` cross-references. Escapes HTML first.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function renderDescription(md: string): string {
+  const escaped = escapeHtml(md);
+  // {option}`path` xref — render as inline code (no link for now; would
+  // need a global page map to resolve cross-page anchors).
+  const withXrefs = escaped.replace(/\{option\}`([^`]+)`/g, '<code class="nix-option__xref">$1</code>');
+  // Plain inline code spans.
+  const withCode = withXrefs.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Paragraphs: split on blank lines.
+  const paragraphs = withCode
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => `<p>${p.replace(/\n/g, ' ')}</p>`)
+    .join('');
+  return paragraphs;
+}
+
+const descriptionHtml = option.description ? renderDescription(option.description) : '';
+---
+
+<section
+  id={anchor}
+  class="nix-option"
+  data-pagefind-body
+  data-pagefind-meta={`option:${option.name}`}
+>
+  <h3 class="nix-option__heading">
+    <a href={`#${anchor}`} class="nix-option__anchor" aria-label={`Permalink to ${option.name}`}>
+      <code>{option.name}</code>
+    </a>
+  </h3>
+
+  <div class="nix-option__meta">
+    <span class={`nix-option__pill nix-option__pill--${pill.tone}`}>{pill.label}</span>
+    <code class="nix-option__type">{option.type}</code>
+    {declaration && (
+      <a class="nix-option__source" href={declaration.url} target="_blank" rel="noreferrer">
+        View source ↗
+      </a>
+    )}
+  </div>
+
+  {descriptionHtml && <div class="nix-option__description" set:html={descriptionHtml} />}
+
+  {option.default && (
+    <div class="nix-option__field">
+      <span class="nix-option__field-label">Default</span>
+      <Code code={option.default.text} lang="nix" />
+    </div>
+  )}
+
+  {option.example && (
+    <div class="nix-option__field">
+      <span class="nix-option__field-label">Example</span>
+      <Code code={option.example.text} lang="nix" />
+    </div>
+  )}
+</section>
+
+<style>
+  .nix-option {
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+    scroll-margin-top: 5rem;
+    background: var(--sl-color-bg-nav);
+  }
+
+  .nix-option__heading {
+    margin: 0 0 0.4rem;
+    font-size: var(--sl-text-lg);
+  }
+  .nix-option__anchor {
+    text-decoration: none;
+    color: var(--sl-color-text);
+  }
+  .nix-option__anchor code {
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .nix-option__anchor:hover code {
+    color: var(--sl-color-text-accent);
+  }
+
+  .nix-option__meta {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+    font-size: var(--sl-text-sm);
+  }
+  .nix-option__pill {
+    display: inline-block;
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.5;
+  }
+  .nix-option__pill--green  { background: rgba( 80, 200, 120, 0.18); color: #2f8d54; }
+  .nix-option__pill--blue   { background: rgba( 80, 140, 240, 0.18); color: #2766c4; }
+  .nix-option__pill--purple { background: rgba(160,  90, 220, 0.18); color: #7a3fc8; }
+  .nix-option__pill--orange { background: rgba(240, 150,  60, 0.20); color: #b9651b; }
+  .nix-option__pill--muted  { background: var(--sl-color-gray-6); color: var(--sl-color-text); }
+  :global([data-theme='dark']) .nix-option__pill--green  { color: #6bd693; }
+  :global([data-theme='dark']) .nix-option__pill--blue   { color: #6f9ff0; }
+  :global([data-theme='dark']) .nix-option__pill--purple { color: #b487ec; }
+  :global([data-theme='dark']) .nix-option__pill--orange { color: #e89858; }
+
+  .nix-option__type {
+    color: var(--sl-color-text-accent);
+    font-size: var(--sl-text-xs);
+  }
+  .nix-option__source {
+    margin-left: auto;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .nix-option__description :global(p) {
+    margin: 0.25rem 0 0.75rem;
+  }
+  .nix-option__description :global(code) {
+    font-size: 0.9em;
+  }
+  .nix-option__description :global(.nix-option__xref) {
+    color: var(--sl-color-text-accent);
+  }
+
+  .nix-option__field { margin-top: 0.6rem; }
+  .nix-option__field-label {
+    display: block;
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-gray-3);
+    margin-bottom: 0.25rem;
+  }
+</style>

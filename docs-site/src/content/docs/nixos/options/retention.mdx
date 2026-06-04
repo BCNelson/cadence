@@ -1,0 +1,10 @@
+---
+title: Retention options
+description: services.cadence.settings.retention.* — per-check ping and event retention limits.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+LevelDB keys are namespaced per check UUID; these limits cap the per-check ring buffers. Lower the values to bound disk footprint; raise them to keep more history for the dashboard and the v3 API.
+
+<NixOptions prefix="services.cadence.settings.retention" />

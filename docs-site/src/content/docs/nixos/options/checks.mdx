@@ -1,0 +1,12 @@
+---
+title: Check options
+description: services.cadence.settings.checks.* — the monitored checks themselves.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+Each check must specify **exactly one** of `period` (interval-based) or `cron` (5-field expression, evaluated in UTC). The module assertions enforce this at `nixos-rebuild build` time, so misconfigurations fail before they reach the daemon.
+
+A check's UUID is derived as `UUIDv5(uuid_salt, slug)` — stable across restarts and unguessable as long as the salt stays secret. Pin a literal `uuid` when migrating from another monitoring system that already issued an ID you need to keep.
+
+<NixOptions prefix="services.cadence.settings.checks" />

@@ -1,0 +1,53 @@
+---
+title: cadence
+description: Self-hosted, config-driven monitoring daemon — a Healthchecks.io alternative where YAML is the source of truth.
+template: splash
+hero:
+  tagline: A single-binary, config-driven Healthchecks.io alternative. Declare your checks in YAML; the API never mutates them.
+  actions:
+    - text: Quickstart
+      link: /cadence/quickstart/
+      icon: rocket
+      variant: primary
+    - text: NixOS module
+      link: /cadence/install/nixos/
+      icon: external
+    - text: View on GitHub
+      link: https://github.com/bcnelson/cadence
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What cadence is
+
+cadence is a passive monitoring daemon. Your services ping it on a schedule; if a ping doesn't arrive within `period + grace`, the check transitions to `down` and webhooks fire. On the next successful ping it returns to `up` and a recovery alert goes out.
+
+It's wire-compatible with Healthchecks.io's ping endpoints and the read side of its v3 management API, so existing cron-job snippets and dashboards keep working unchanged.
+
+## The defining decision
+
+YAML is the source of truth. LevelDB persists runtime state and ping history; it never holds check definitions. Every write endpoint on the management API returns `409 Conflict` with a pointer back to the config file. Want to add a check? Edit the YAML and reload — there is no UI-driven CRUD.
+
+<CardGrid>
+  <Card title="Declarative" icon="document">
+    Every check, channel, and key lives in version-controlled YAML. The NixOS module type-checks the same schema at `nixos-rebuild build`.
+  </Card>
+  <Card title="Single binary" icon="setting">
+    The Go daemon embeds the React dashboard. No separate frontend service, no database to provision — just LevelDB on local disk.
+  </Card>
+  <Card title="HC.io-compatible" icon="approve-check">
+    Ping endpoints (`/ping/{slug}`, `/ping/{uuid}/start`, exit codes, body capture) and v3 read endpoints match Healthchecks.io.
+  </Card>
+  <Card title="Stable identity" icon="seti:lock">
+    Each check's UUID is `UUIDv5(uuid_salt, slug)` — deterministic across restarts and unguessable as long as the salt stays secret.
+  </Card>
+</CardGrid>
+
+## Get started
+
+- [Quickstart](/cadence/quickstart/) — minimal config, ping a check, see it in the dashboard.
+- [Install on NixOS](/cadence/install/nixos/) — the recommended path; full option reference is auto-generated from `nix/module.nix`.
+- [Configuration reference](/cadence/configuration/overview/) — top-level keys, layering, interpolation, merge semantics.
+- [HTTP API](/cadence/api/ping/) — ping endpoints and the v3 management read side.

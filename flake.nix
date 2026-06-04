@@ -22,9 +22,10 @@
           cadence = pkgs.callPackage ./nix/package.nix {
             inherit version commit;
           };
+          docs-options = import ./nix/options-doc.nix { inherit self; } { inherit pkgs; };
         in
         {
-          inherit cadence;
+          inherit cadence docs-options;
           default = cadence;
         }
       );

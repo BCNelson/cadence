@@ -1,0 +1,14 @@
+---
+title: Ping key options
+description: services.cadence.settings.ping_keys.* — named registry of shared secrets for slug-form ping requests.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+Ping keys are named, many-to-many credentials. Checks reference them by `name`, so rotating a secret is a one-line registry change — the check definitions don't move.
+
+Slug-form `/ping/{slug}` requests require an `X-Ping-Key` header (or `ping_key=` query parameter) matching one of the names listed in the check's `ping_keys`. A missing or wrong key returns **404, not 403** — the slug namespace stays non-enumerable.
+
+A check with an empty `ping_keys` list is "open" — it accepts UUID-form `/ping/{uuid}` requests with no key. Don't mix the two: shared keys do not authorize UUID-form requests.
+
+<NixOptions prefix="services.cadence.settings.ping_keys" />

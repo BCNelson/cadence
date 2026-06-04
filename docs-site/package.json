@@ -1,0 +1,19 @@
+{
+  "name": "cadence-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run sync-options && astro dev",
+    "start": "npm run sync-options && astro dev",
+    "build": "npm run sync-options && astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "sync-options": "./scripts/sync-options.sh"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.30.0",
+    "astro": "^5.0.0",
+    "sharp": "^0.33.5"
+  }
+}

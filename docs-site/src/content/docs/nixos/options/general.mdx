@@ -1,0 +1,20 @@
+---
+title: General module options
+description: Top-level services.cadence.* options — enable, package, user/group, dataDir, listen, firewall, secrets handling.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+These options control the service itself: whether it runs, who it runs as, where its state lives, and how its configuration and secrets are layered in.
+
+For the typed configuration tree (`services.cadence.settings.*`), see the per-page references in the sidebar: [Server](/cadence/nixos/options/server/), [Retention](/cadence/nixos/options/retention/), [Ping keys](/cadence/nixos/options/ping-keys/), [Defaults](/cadence/nixos/options/defaults/), [Channels](/cadence/nixos/options/channels/), and [Checks](/cadence/nixos/options/checks/).
+
+<NixOptions prefix="services.cadence.dataDir" />
+<NixOptions prefix="services.cadence.enable" />
+<NixOptions prefix="services.cadence.environmentFile" />
+<NixOptions prefix="services.cadence.extraConfigFiles" />
+<NixOptions prefix="services.cadence.group" />
+<NixOptions prefix="services.cadence.listen" />
+<NixOptions prefix="services.cadence.openFirewall" />
+<NixOptions prefix="services.cadence.package" />
+<NixOptions prefix="services.cadence.user" />

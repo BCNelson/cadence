@@ -1,0 +1,12 @@
+---
+title: Channel options
+description: services.cadence.settings.channels.* — notification destinations referenced by checks.
+---
+
+import NixOptions from '../../../../components/NixOptions.astro';
+
+Channels are notification destinations. Cadence fires **once** on the transition into `down` and once on recovery to `up` — there are no repeat-while-down alerts. Channels referenced by a check that don't exist in this list cause the module assertion to fail at `nixos-rebuild build`.
+
+In v1 only `type = "webhook"` is supported. See the [webhooks reference](/cadence/alerting/webhooks/) for the JSON payload shape.
+
+<NixOptions prefix="services.cadence.settings.channels" />

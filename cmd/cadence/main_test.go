@@ -198,6 +198,7 @@ checks:
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events", http.NoBody)
+		req.Header.Set("X-Api-Key", "rw-token")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -213,6 +214,20 @@ checks:
 		// handler installed and replied with SSE headers.
 		cancel()
 		_, _ = io.Copy(io.Discard, resp.Body)
+	})
+
+	t.Run("sse events rejects missing api key", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events", http.NoBody)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("status: got %d, want 401", resp.StatusCode)
+		}
 	})
 
 	t.Run("spa fallback served at unknown route", func(t *testing.T) {

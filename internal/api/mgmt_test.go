@@ -87,6 +87,12 @@ func TestMgmtAuthRequired(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("bad key: got %d", rr.Code)
 	}
+	// Query-string form is accepted (browser EventSource and other
+	// header-less clients depend on this).
+	rr = h.do("GET", "/api/v3/checks/?api_key=ro-key", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("query-key: got %d", rr.Code)
+	}
 }
 
 func TestMgmtListReadWriteIncludesPingURLAndChannels(t *testing.T) {

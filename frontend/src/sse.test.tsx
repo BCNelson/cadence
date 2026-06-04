@@ -3,6 +3,7 @@ import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useTransitionStream } from './sse'
+import { setApiKey, clearApiKey } from './api'
 
 // Minimal EventSource fake — captures listeners so the test can dispatch
 // events synchronously, and records close() so cleanup can be asserted.
@@ -42,17 +43,37 @@ describe('useTransitionStream', () => {
   beforeEach(() => {
     FakeEventSource.instances = []
     vi.stubGlobal('EventSource', FakeEventSource)
+    setApiKey('test-key')
   })
   afterEach(() => {
     vi.unstubAllGlobals()
+    clearApiKey()
   })
 
-  it('opens an EventSource to /events', () => {
+  it('opens an EventSource to /events with the api_key query parameter', () => {
     const qc = new QueryClient()
     renderHook(() => useTransitionStream(), { wrapper: wrapper(qc) })
 
     expect(FakeEventSource.instances).toHaveLength(1)
-    expect(FakeEventSource.instances[0].url).toBe('/events')
+    expect(FakeEventSource.instances[0].url).toBe('/events?api_key=test-key')
+  })
+
+  it('url-encodes the api key', () => {
+    setApiKey('a b/c?d')
+    const qc = new QueryClient()
+    renderHook(() => useTransitionStream(), { wrapper: wrapper(qc) })
+
+    expect(FakeEventSource.instances[0].url).toBe(
+      '/events?api_key=a%20b%2Fc%3Fd',
+    )
+  })
+
+  it('does not open a stream when no api key is configured', () => {
+    clearApiKey()
+    const qc = new QueryClient()
+    renderHook(() => useTransitionStream(), { wrapper: wrapper(qc) })
+
+    expect(FakeEventSource.instances).toHaveLength(0)
   })
 
   it('invalidates the checks query when a transition event fires', () => {

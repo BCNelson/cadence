@@ -331,10 +331,12 @@ func TestE2EHappyPathPingTickDownRecover(t *testing.T) {
 		t.Errorf("list[0]: %+v", listResp.Checks[0])
 	}
 
-	// Open SSE subscription before causing the transition.
+	// Open SSE subscription before causing the transition. /events is
+	// auth-gated; the test passes the read-only key via query string
+	// (the form browser EventSource also uses).
 	sseCtx, sseCancel := context.WithCancel(context.Background())
 	defer sseCancel()
-	events := subscribeSSE(t, sseCtx, h.serverURL+"/events")
+	events := subscribeSSE(t, sseCtx, h.serverURL+"/events?api_key=ro-key")
 	h.waitForSubscribers(t, 1, 2*time.Second)
 
 	// Advance the clock past period+grace and tick → down.
@@ -503,6 +505,29 @@ func TestE2EAuthBoundaries(t *testing.T) {
 		resp := mustDo(t, http.MethodGet, h.serverURL+"/api/v3/checks/", http.Header{"X-Api-Key": []string{"ro-key"}}, "")
 		if resp.code != http.StatusOK {
 			t.Errorf("got %d, want 200", resp.code)
+		}
+	})
+	t.Run("mgmt accepts api_key query param", func(t *testing.T) {
+		resp := mustDo(t, http.MethodGet, h.serverURL+"/api/v3/checks/?api_key=ro-key", nil, "")
+		if resp.code != http.StatusOK {
+			t.Errorf("got %d, want 200", resp.code)
+		}
+	})
+
+	// SSE auth: same allow-list as mgmt; the streamed success path is
+	// exercised by TestE2EHappyPathPingTickDownRecover (which connects
+	// with ?api_key=ro-key). Here we only assert the 401 boundary
+	// because mustDo would hang reading a never-ending 200 body.
+	t.Run("sse no api key", func(t *testing.T) {
+		resp := mustDo(t, http.MethodGet, h.serverURL+"/events", nil, "")
+		if resp.code != http.StatusUnauthorized {
+			t.Errorf("got %d, want 401", resp.code)
+		}
+	})
+	t.Run("sse wrong api key", func(t *testing.T) {
+		resp := mustDo(t, http.MethodGet, h.serverURL+"/events?api_key=nope", nil, "")
+		if resp.code != http.StatusUnauthorized {
+			t.Errorf("got %d, want 401", resp.code)
 		}
 	})
 

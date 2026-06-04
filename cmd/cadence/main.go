@@ -159,7 +159,10 @@ func registerRoutes(mux *http.ServeMux, reg *config.Registry, eng *engine.Engine
 		mux.HandleFunc(r.Pattern, r.Handler)
 	}
 
-	mux.HandleFunc("/events", bus.Handler())
+	// SSE shares the management API's key allow-list. Browser EventSource
+	// can't set headers, so api.Authenticate also accepts ?api_key= as a
+	// query-string fallback.
+	mux.Handle("/events", api.RequireKey(reg, bus.Handler()))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

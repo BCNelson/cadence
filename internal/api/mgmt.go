@@ -57,40 +57,9 @@ func (h *MgmtHandler) Routes() []Route {
 	}
 }
 
-// keyKind describes which api_keys list authenticated a request, so we
-// can decide whether to include the read-write-only fields in responses.
-type keyKind int
-
-const (
-	keyNone keyKind = iota
-	keyReadOnly
-	keyReadWrite
-)
-
-func (h *MgmtHandler) authenticate(r *http.Request) keyKind {
-	provided := r.Header.Get("X-Api-Key")
-	if provided == "" {
-		// HC.io's docs say keys can also live in a JSON `api_key` body
-		// field. For v1 we only honor the header — the JSON form is
-		// awkward for GET requests anyway.
-		return keyNone
-	}
-	for _, k := range h.registry.Server.APIKeys.ReadWrite {
-		if k == provided {
-			return keyReadWrite
-		}
-	}
-	for _, k := range h.registry.Server.APIKeys.ReadOnly {
-		if k == provided {
-			return keyReadOnly
-		}
-	}
-	return keyNone
-}
-
 func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
-	kind := h.authenticate(r)
-	if kind == keyNone {
+	kind := Authenticate(h.registry, r)
+	if kind == KeyNone {
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -105,8 +74,8 @@ func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MgmtHandler) getCheck(w http.ResponseWriter, r *http.Request) {
-	kind := h.authenticate(r)
-	if kind == keyNone {
+	kind := Authenticate(h.registry, r)
+	if kind == KeyNone {
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -146,7 +115,7 @@ func (h *MgmtHandler) resolveCheck(id string) (*config.ResolvedCheck, error) {
 // not supported because configuration is the source of truth.
 func (h *MgmtHandler) writeRejected(op string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.authenticate(r) == keyNone {
+		if Authenticate(h.registry, r) == KeyNone {
 			writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 			return
 		}
@@ -180,7 +149,7 @@ type checkView struct {
 	UniqueKey string `json:"unique_key,omitempty"`
 }
 
-func (h *MgmtHandler) buildView(c *config.ResolvedCheck, kind keyKind) checkView {
+func (h *MgmtHandler) buildView(c *config.ResolvedCheck, kind KeyKind) checkView {
 	snap, _ := h.engine.Snapshot(c.UUID)
 	v := checkView{
 		Name:    c.Name,
@@ -210,15 +179,15 @@ func (h *MgmtHandler) buildView(c *config.ResolvedCheck, kind keyKind) checkView
 	}
 
 	switch kind {
-	case keyReadWrite:
+	case KeyReadWrite:
 		pu := h.pingURL(c)
 		ch := strings.Join(c.Channels, ",")
 		v.PingURL = &pu
 		v.Channels = &ch
-	case keyReadOnly:
+	case KeyReadOnly:
 		v.UniqueKey = uniqueKey(c.UUID)
-	case keyNone:
-		// authenticate() rejects keyNone before we get here
+	case KeyNone:
+		// Authenticate() rejects KeyNone before we get here.
 	}
 	return v
 }

@@ -9,7 +9,13 @@ The Management API is HC.io v3 wire-compatible on the **read** side. Every write
 
 Send `X-Api-Key: <key>` on every request. Keys are declared under `server.api_keys.read_write` or `server.api_keys.read_only`. A missing or unknown key returns `401 Unauthorized` with a JSON error.
 
-The HC.io convention of putting `api_key` in a JSON body is not honored in v1 — the header form is the only path.
+For clients that can't set request headers — notably browser `EventSource` for the [SSE stream](#sse-stream) — the key may also be passed as an `api_key` query parameter (`?api_key=<key>`). The header wins if both are set. The HC.io convention of putting `api_key` in a JSON body is not honored in v1.
+
+Be aware that query-string keys can show up in HTTP access logs and browser history. Prefer the header form whenever possible; reserve `?api_key=` for `EventSource` and similar header-less callers.
+
+## SSE stream
+
+`GET /events` opens a Server-Sent Events stream that emits a `transition` event for every check state change. The endpoint shares the management API key allow-list (any valid key is accepted) and supports both the header and `?api_key=` query forms.
 
 ## Read endpoints
 

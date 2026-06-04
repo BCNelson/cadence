@@ -232,6 +232,115 @@ func TestWebhookCustomMethodAndHeaders(t *testing.T) {
 	}
 }
 
+func TestWebhookUserAgentHeader(t *testing.T) {
+	rc := &receivingChannel{}
+	ts := httptest.NewServer(rc.handler())
+	defer ts.Close()
+
+	channels := map[string]config.Channel{
+		"hook": {Name: "hook", URL: ts.URL},
+	}
+	w := New(channels, Options{})
+	check := &config.ResolvedCheck{
+		Slug: "api", UUID: uuid.New(), Channels: []string{"hook"},
+	}
+	trans := &engine.Transition{From: store.StatusUp, To: store.StatusDown, At: time.Now()}
+	if err := w.Down(context.Background(), check, trans); err != nil {
+		t.Fatal(err)
+	}
+	if got := rc.last().headers.Get("User-Agent"); got != "cadence/v1" {
+		t.Errorf("User-Agent: got %q, want cadence/v1", got)
+	}
+}
+
+func TestWebhookNetworkErrorSurfaces(t *testing.T) {
+	// Point the channel at a server we've already closed, so the client gets
+	// a connection-refused on dial.
+	rc := &receivingChannel{}
+	ts := httptest.NewServer(rc.handler())
+	ts.Close() // immediately close to free the port
+
+	channels := map[string]config.Channel{
+		"dead": {Name: "dead", URL: ts.URL},
+	}
+	w := New(channels, Options{Timeout: time.Second})
+	check := &config.ResolvedCheck{
+		Slug: "api", UUID: uuid.New(), Channels: []string{"dead"},
+	}
+	trans := &engine.Transition{From: store.StatusUp, To: store.StatusDown, At: time.Now()}
+	err := w.Down(context.Background(), check, trans)
+	if err == nil {
+		t.Fatal("expected network error from unreachable server")
+	}
+	if !strings.Contains(err.Error(), "dead") {
+		t.Errorf("error should mention channel name: %v", err)
+	}
+}
+
+func TestWebhookHonorsTimeout(t *testing.T) {
+	// Server hangs forever so the only thing that returns is the client
+	// timeout firing.
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	// Order matters: ts.Close waits for in-flight handlers, so release the
+	// blocked handler before closing the server. defers run LIFO, so register
+	// ts.Close first (runs last) and close(release) second (runs first).
+	defer ts.Close()
+	defer close(release)
+
+	// Each case configures Options.Timeout and asserts the actual elapsed
+	// dispatch time lands within max(10% * T, 10ms) of T. The cases span
+	// the regime where 10ms dominates (50ms) up to where the percentage
+	// dominates (250ms).
+	cases := []time.Duration{
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		250 * time.Millisecond,
+	}
+	for _, target := range cases {
+		t.Run(target.String(), func(t *testing.T) {
+			tol := target / 10
+			if tol < 10*time.Millisecond {
+				tol = 10 * time.Millisecond
+			}
+			lower := target - tol
+			upper := target + tol
+
+			w := New(map[string]config.Channel{
+				"slow": {Name: "slow", URL: ts.URL},
+			}, Options{Timeout: target})
+			check := &config.ResolvedCheck{
+				Slug: "api", UUID: uuid.New(), Channels: []string{"slow"},
+			}
+			trans := &engine.Transition{From: store.StatusUp, To: store.StatusDown, At: time.Now()}
+
+			start := time.Now()
+			err := w.Down(context.Background(), check, trans)
+			elapsed := time.Since(start)
+
+			if err == nil {
+				t.Fatalf("target=%v: expected timeout error from slow server", target)
+			}
+			// Error must look like a timeout (http.Client.Timeout or context deadline).
+			msg := err.Error()
+			if !strings.Contains(msg, "Timeout") && !strings.Contains(msg, "deadline") {
+				t.Errorf("target=%v: error should look like a timeout: got %v", target, err)
+			}
+			if elapsed < lower {
+				t.Errorf("target=%v: dispatch too fast (%v < %v) — did the timeout actually drive it?", target, elapsed, lower)
+			}
+			if elapsed > upper {
+				t.Errorf("target=%v: dispatch did not honor timeout (%v > %v)", target, elapsed, upper)
+			}
+		})
+	}
+}
+
 func TestWebhookCheckWithNoChannelsIsNoop(t *testing.T) {
 	w := New(nil, Options{})
 	check := &config.ResolvedCheck{Slug: "api", UUID: uuid.New()}

@@ -492,6 +492,64 @@ checks:
 	}
 }
 
+func TestSnapshotAll(t *testing.T) {
+	reg := loadRegistry(t, `
+server: { uuid_salt: "s" }
+checks:
+  - { slug: api, period: 1h }
+  - { slug: worker, period: 1h }
+`)
+	st := openStore(t)
+	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
+	e, err := New(reg, st, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	api := reg.CheckBySlug("api")
+	worker := reg.CheckBySlug("worker")
+	if err := e.HandlePing(api.UUID, &PingRequest{Kind: store.PingSuccess}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.HandlePing(worker.UUID, &PingRequest{Kind: store.PingFail}); err != nil {
+		t.Fatal(err)
+	}
+
+	all := e.SnapshotAll()
+	if len(all) != 2 {
+		t.Fatalf("SnapshotAll size: got %d, want 2", len(all))
+	}
+	if got := all[api.UUID].Status; got != store.StatusUp {
+		t.Errorf("api status: %q", got)
+	}
+	if got := all[worker.UUID].Status; got != store.StatusDown {
+		t.Errorf("worker status: %q", got)
+	}
+
+	// Mutating the returned map must not affect the engine.
+	delete(all, api.UUID)
+	again := e.SnapshotAll()
+	if len(again) != 2 {
+		t.Errorf("SnapshotAll returned a live reference: second call sees %d", len(again))
+	}
+}
+
+func TestNopBusAndAlerter(t *testing.T) {
+	// These exist as wiring placeholders; the only contract is "doesn't
+	// panic, returns nil errors." Pin that explicitly so a future refactor
+	// can't silently change it.
+	var bus EventBus = NopBus{}
+	bus.Publish(&Transition{})
+
+	var a Alerter = NopAlerter{}
+	if err := a.Down(context.Background(), nil, &Transition{}); err != nil {
+		t.Errorf("NopAlerter.Down: %v", err)
+	}
+	if err := a.Recover(context.Background(), nil, &Transition{}); err != nil {
+		t.Errorf("NopAlerter.Recover: %v", err)
+	}
+}
+
 func TestRunBlocksUntilContextCancel(t *testing.T) {
 	reg := loadRegistry(t, `
 server: { uuid_salt: "s" }

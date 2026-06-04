@@ -14,7 +14,7 @@ run: build
 
 # Run all Go tests with coverage
 test:
-    go test -race -count=1 -timeout=300s -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/...
+    go test -race -count=1 -timeout=300s -coverprofile=coverage.out -covermode=atomic -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/...
     go tool cover -func=coverage.out
 
 # Coverage HTML report at coverage.html (filtered via .coverignore if present)

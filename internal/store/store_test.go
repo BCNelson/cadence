@@ -216,6 +216,18 @@ func TestRecentPingsLimit(t *testing.T) {
 	}
 }
 
+func TestMaxBodyBytesReflectsOptions(t *testing.T) {
+	s := newTestStore(t, Options{MaxBodyBytes: 4096})
+	if got := s.MaxBodyBytes(); got != 4096 {
+		t.Errorf("explicit MaxBodyBytes: got %d, want 4096", got)
+	}
+
+	d := newTestStore(t, Options{})
+	if got := d.MaxBodyBytes(); got != DefaultMaxBodyBytes {
+		t.Errorf("default MaxBodyBytes: got %d, want %d", got, DefaultMaxBodyBytes)
+	}
+}
+
 func TestDefaultsApplied(t *testing.T) {
 	o := Options{}.withDefaults()
 	if o.MaxPings != DefaultMaxPings || o.MaxEvents != DefaultMaxEvents || o.MaxBodyBytes != DefaultMaxBodyBytes {

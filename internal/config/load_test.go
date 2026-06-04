@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 // writeFile is a tiny helper that fails the test on write error rather than
@@ -400,6 +403,78 @@ func TestDeriveUUIDStableAndUnguessable(t *testing.T) {
 	}
 	if a1 == c {
 		t.Error("UUID identical for different slugs")
+	}
+}
+
+func TestRegistryCheckByUUID(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "cfg.yaml", `
+server: { uuid_salt: "salt-X" }
+checks:
+  - { slug: api, period: 1h }
+`)
+	reg, err := Load([]string{filepath.Join(dir, "cfg.yaml")}, Options{Env: fixedEnv(nil)})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	derived := DeriveUUID("salt-X", "api")
+	if got := reg.CheckByUUID(derived); got == nil || got.Slug != "api" {
+		t.Errorf("CheckByUUID(derived): got %+v", got)
+	}
+	if got := reg.CheckByUUID(uuid.New()); got != nil {
+		t.Errorf("CheckByUUID(random): want nil, got %+v", got)
+	}
+}
+
+func TestDurationStringAndStd(t *testing.T) {
+	d := Duration(5 * time.Minute)
+	if got := d.String(); got != "5m0s" {
+		t.Errorf("String: got %q", got)
+	}
+	if got := d.Std(); got != 5*time.Minute {
+		t.Errorf("Std: got %v", got)
+	}
+	// Zero value.
+	if Duration(0).String() != "0s" {
+		t.Errorf("zero duration: got %q", Duration(0).String())
+	}
+}
+
+func TestDurationUnmarshalRejectsNonScalar(t *testing.T) {
+	type wrap struct {
+		D Duration `yaml:"d"`
+	}
+	// A sequence node where a scalar is expected.
+	var w wrap
+	err := yaml.Unmarshal([]byte("d: [1, 2, 3]\n"), &w)
+	if err == nil || !strings.Contains(err.Error(), "must be a string") {
+		t.Errorf("sequence input: want must-be-string error, got %v", err)
+	}
+	// A mapping node where a scalar is expected.
+	err = yaml.Unmarshal([]byte("d: {a: 1}\n"), &w)
+	if err == nil || !strings.Contains(err.Error(), "must be a string") {
+		t.Errorf("mapping input: want must-be-string error, got %v", err)
+	}
+}
+
+func TestDurationUnmarshalInvalid(t *testing.T) {
+	type wrap struct {
+		D Duration `yaml:"d"`
+	}
+	var w wrap
+	// Bare "60" has no unit and must error rather than being silently treated
+	// as nanoseconds.
+	err := yaml.Unmarshal([]byte("d: \"60\"\n"), &w)
+	if err == nil || !strings.Contains(err.Error(), "invalid duration") {
+		t.Errorf("bare 60: want invalid-duration error, got %v", err)
+	}
+	// Empty string parses as zero — explicit allowance.
+	w = wrap{}
+	if err := yaml.Unmarshal([]byte("d: \"\"\n"), &w); err != nil {
+		t.Errorf("empty string: want no error, got %v", err)
+	}
+	if w.D != 0 {
+		t.Errorf("empty string: want zero, got %v", w.D)
 	}
 }
 

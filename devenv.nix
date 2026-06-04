@@ -22,6 +22,7 @@
     git
     just
     air
+    playwright-driver.browsers
   ];
 
   env = {
@@ -29,6 +30,11 @@
     GOCACHE = "${config.env.DEVENV_STATE}/go-cache";
     GOMODCACHE = "${config.env.DEVENV_STATE}/go-mod-cache";
     NODE_ENV = "development";
+    # Use the nix-provided browsers; keep the npm pin in
+    # frontend/package.json in lockstep with pkgs.playwright.version.
+    PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+    PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
   };
 
   dotenv.enable = true;

@@ -30,7 +30,7 @@ function compareChecks(a: Check, b: Check): number {
   return a.slug.localeCompare(b.slug)
 }
 
-function Dashboard() {
+export function Dashboard() {
   useTransitionStream()
   const { data, isLoading, error } = useQuery({
     queryKey: ['checks'],

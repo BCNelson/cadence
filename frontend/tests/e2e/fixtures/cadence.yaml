@@ -1,0 +1,21 @@
+server:
+  listen: "127.0.0.1:18080"
+  base_url: "http://127.0.0.1:18080"
+  uuid_salt: "e2e-salt"
+  api_keys:
+    read_only: ["e2e-key"]
+
+data_dir: "./tmp/e2e-data"
+
+retention:
+  pings: 10
+  events: 10
+
+defaults:
+  grace: 5m
+
+checks:
+  - slug: smoke-check
+    name: "Smoke check"
+    cron: "*/5 * * * *"
+    tags: [e2e, smoke]

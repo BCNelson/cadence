@@ -33,6 +33,17 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8080',
+      '/events': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        ws: false,
+        // SSE needs streaming; disable response buffering.
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Accept', 'text/event-stream')
+          })
+        },
+      },
     },
   },
   build: {

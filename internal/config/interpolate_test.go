@@ -118,22 +118,40 @@ func TestResolveStringDollarEscape(t *testing.T) {
 	}
 }
 
-func TestResolveStringFileThenEnvOrdering(t *testing.T) {
-	// File substitution runs first, so a file containing ${env:X} gets
-	// env-resolved on the second pass.
+func TestResolveStringEnvThenFileOrdering(t *testing.T) {
+	// Env substitution runs first, so a ${file:...} argument can itself
+	// be an ${env:...} token — the operator points env at a secret path
+	// and the daemon reads the contents.
 	dir := t.TempDir()
-	writeFile(t, dir, "key.txt", "${env:K}\n")
-	env := fixedEnv(map[string]string{"K": "from-env"})
+	abs := writeFile(t, dir, "salt.txt", "the-real-salt\n")
+	env := fixedEnv(map[string]string{"SALT_FILE": abs})
 	got, err := resolveString(taggedString{
-		value:  "${file:./key.txt}",
+		value:  "${file:${env:SALT_FILE}}",
 		dir:    dir,
 		origin: "cfg.yaml",
 	}, env)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	if got != "from-env" {
+	if got != "the-real-salt" {
 		t.Errorf("two-phase: got %q", got)
+	}
+}
+
+func TestResolveStringEnvFirstSurfacesEnvError(t *testing.T) {
+	// ${file:${env:MISSING}} with MISSING unset must surface the env
+	// "variable not set" error, not a file-not-found at the literal
+	// path "${env:MISSING}".
+	_, err := resolveString(taggedString{
+		value:  "${file:${env:MISSING_PATH}}",
+		dir:    ".",
+		origin: "cfg.yaml",
+	}, fixedEnv(nil))
+	if err == nil || !strings.Contains(err.Error(), "MISSING_PATH") {
+		t.Errorf("want env error mentioning MISSING_PATH, got %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "file interpolation") {
+		t.Errorf("env error should not be wrapped as file error: %v", err)
 	}
 }
 

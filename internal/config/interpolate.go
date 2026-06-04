@@ -12,10 +12,13 @@ import (
 type envLookup func(name string) (string, bool)
 
 // interpolate runs the two-phase substitution pass over the merged tree.
-// Phase 1 expands every ${file:...} relative to the directory of the
-// taggedString it appears in; Phase 2 expands every ${env:...} (with
-// optional :-default fallback). After both phases any surviving ${...}
-// is an error.
+// Phase 1 expands every ${env:...} (with optional :-default fallback);
+// Phase 2 expands every ${file:...} relative to the directory of the
+// taggedString it appears in. Env-first lets a ${file:...} argument
+// reference an ${env:...} token, e.g. ${file:${env:CADENCE_FOO_FILE}},
+// so operators can parameterize secret paths via systemd
+// EnvironmentFile= without baking the path into YAML. After both
+// phases any surviving ${...} is an error.
 //
 // Walks once, calling resolveString on each taggedString. Non-string
 // scalars and structural nodes pass through unchanged.
@@ -54,16 +57,18 @@ func interpolate(v any, env envLookup) (any, error) {
 }
 
 // resolveString expands all interpolation tokens in s, in the order:
-// ${file:...} first, then ${env:...}, then $$ -> $. Errors carry s.origin
-// for user-facing messages.
+// ${env:...} first, then ${file:...}, then $$ -> $. Env-first means a
+// ${file:...} argument can itself contain an ${env:...} token, so an
+// operator can point env at a secret path and have the daemon read the
+// file's contents. Errors carry s.origin for user-facing messages.
 func resolveString(s taggedString, env envLookup) (string, error) {
-	out, err := substituteTokens(s.value, s.dir, s.origin, "file", expandFile)
+	out, err := substituteTokens(s.value, s.dir, s.origin, "env", func(arg, _ string) (string, error) {
+		return expandEnv(arg, env)
+	})
 	if err != nil {
 		return "", err
 	}
-	out, err = substituteTokens(out, s.dir, s.origin, "env", func(arg, _ string) (string, error) {
-		return expandEnv(arg, env)
-	})
+	out, err = substituteTokens(out, s.dir, s.origin, "file", expandFile)
 	if err != nil {
 		return "", err
 	}
@@ -78,48 +83,80 @@ func resolveString(s taggedString, env envLookup) (string, error) {
 	return strings.ReplaceAll(out, "$$", "$"), nil
 }
 
-// substituteTokens scans s for `${scheme:ARG}` tokens and replaces each by
-// calling expand(arg, dir). Other schemes pass through untouched so a later
-// phase can handle them. `$$` is left intact for the final unescape pass.
-func substituteTokens(s, dir, origin, scheme string, expand func(arg, dir string) (string, error)) (string, error) {
-	var b strings.Builder
-	b.Grow(len(s))
-	prefix := scheme + ":"
+// interpolationToken locates a ${...} span in a source string.
+type interpolationToken struct {
+	start, end int // [start, end) covering the literal `${` ... `}`
+	body       string
+}
 
+// findLeafTokens walks s once and returns every "leaf" ${...} token —
+// one whose body contains no nested ${. Non-leaf (outer) tokens are
+// not returned; they become leaves only after their inner tokens are
+// substituted away. `$$` is honored as an escape and never starts a
+// token. An unmatched ${ produces an unterminated error.
+//
+// Leaves are returned in document order (sorted by start position).
+func findLeafTokens(s, origin string) ([]interpolationToken, error) {
+	var stack []int // positions of each open `${` awaiting a `}`
+	var leaves []interpolationToken
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c == '$' && i+1 < len(s) {
 			next := s[i+1]
 			if next == '$' {
-				b.WriteByte('$')
-				b.WriteByte('$')
 				i += 2
 				continue
 			}
 			if next == '{' {
-				end := strings.IndexByte(s[i+2:], '}')
-				if end < 0 {
-					return "", fmt.Errorf("%s: unterminated interpolation in %q", origin, s)
-				}
-				body := s[i+2 : i+2+end]
-				if strings.HasPrefix(body, prefix) {
-					arg := body[len(prefix):]
-					replacement, err := expand(arg, dir)
-					if err != nil {
-						return "", fmt.Errorf("%s: %w", origin, err)
-					}
-					b.WriteString(replacement)
-				} else {
-					b.WriteString(s[i : i+2+end+1])
-				}
-				i += 2 + end + 1
+				stack = append(stack, i)
+				i += 2
 				continue
 			}
 		}
-		b.WriteByte(c)
+		if c == '}' && len(stack) > 0 {
+			start := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			body := s[start+2 : i]
+			if !strings.Contains(body, "${") {
+				leaves = append(leaves, interpolationToken{start: start, end: i + 1, body: body})
+			}
+			i++
+			continue
+		}
 		i++
 	}
-	return b.String(), nil
+	if len(stack) > 0 {
+		return nil, fmt.Errorf("%s: unterminated interpolation in %q", origin, s)
+	}
+	return leaves, nil
+}
+
+// substituteTokens replaces every leaf `${scheme:ARG}` in s by calling
+// expand(ARG, dir). Tokens of other schemes pass through untouched so a
+// later phase can handle them. `$$` is left intact for the final unescape
+// pass. Nested tokens are resolved innermost-first: a `${file:${env:X}}`
+// becomes a leaf for the file pass only after the env pass has resolved
+// its inner `${env:X}`.
+func substituteTokens(s, dir, origin, scheme string, expand func(arg, dir string) (string, error)) (string, error) {
+	prefix := scheme + ":"
+	leaves, err := findLeafTokens(s, origin)
+	if err != nil {
+		return "", err
+	}
+	// Replace right-to-left so earlier positions stay valid as we mutate s.
+	for i := len(leaves) - 1; i >= 0; i-- {
+		l := leaves[i]
+		if !strings.HasPrefix(l.body, prefix) {
+			continue
+		}
+		arg := l.body[len(prefix):]
+		replacement, err := expand(arg, dir)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", origin, err)
+		}
+		s = s[:l.start] + replacement + s[l.end:]
+	}
+	return s, nil
 }
 
 // expandFile reads the file at path (resolved relative to dir if not

@@ -48,12 +48,13 @@ Then in `configuration.nix`:
 
 ## Secrets
 
-The generated settings YAML lands in the world-readable Nix store, so never inline secrets in `settings`. Two channels are designed for secret material:
+The generated settings YAML lands in the world-readable Nix store, so never inline secrets in `settings`. Three channels are designed for secret material:
 
 - **`environmentFile`** — a `KEY=value` file passed to systemd as `EnvironmentFile=`. Reference each variable in YAML with `${env:KEY}` ([interpolation reference](/cadence/configuration/interpolation/)).
+- **`${file:...}` interpolation in `settings`** — pair cadence with any secret manager that drops a file on disk: agenix (`age.secrets.<name>.path`), sops-nix (`sops.secrets.<name>.path`), Kubernetes projected volumes, or systemd `LoadCredential=`. The token itself is non-secret, so it's safe to inline. The secret file's `owner`/`mode` must permit reads by `services.cadence.user` (cadence runs as a fixed user, so set the secret's `owner` to that user). When the path itself comes from `environmentFile`, compose the two: `"${file:${env:CADENCE_UUID_SALT_FILE}}"` — env resolves first, then file reads its contents.
 - **`extraConfigFiles`** — extra YAML files (typically on tmpfs or owned by the cadence user) layered on top of `settings`. Field-level merge happens inside cadence, so these override `settings` per-field.
 
-The VM test under `nix/test.nix` exercises both paths.
+The VM test under `nix/test.nix` exercises the first and third channels.
 
 ## Hardening
 

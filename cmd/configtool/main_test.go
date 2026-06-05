@@ -197,6 +197,68 @@ func TestPrintResolvedMasksKeysAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestSortedChecksFlagsOpenAccessAndInheritance(t *testing.T) {
+	checks := map[string]*config.ResolvedCheck{
+		"open-check": {
+			Slug:    "open-check",
+			UUID:    uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+			Enabled: true,
+			Period:  1 * time.Hour,
+			// No PingKeys → resolves to open access.
+		},
+		"inherited-check": {
+			Slug:     "inherited-check",
+			UUID:     uuid.MustParse("22222222-3333-4444-5555-666666666666"),
+			Enabled:  true,
+			Period:   1 * time.Hour,
+			Grace:    5 * time.Minute,
+			Timeout:  30 * time.Second,
+			PingKeys: []string{"ops"},
+			Channels: []string{"hook"},
+			Inherited: config.Inherited{
+				Grace:    true,
+				PingKeys: true,
+			},
+		},
+		"explicit-check": {
+			Slug:     "explicit-check",
+			UUID:     uuid.MustParse("33333333-4444-5555-6666-777777777777"),
+			Enabled:  true,
+			Period:   1 * time.Hour,
+			PingKeys: []string{"ops"},
+		},
+	}
+	rows := sortedChecks(checks)
+	byName := map[string]map[string]any{}
+	for _, r := range rows {
+		byName[r["slug"].(string)] = r
+	}
+
+	if got := byName["open-check"]["access"]; got != "open (UUID-only)" {
+		t.Errorf("open-check.access: got %v", got)
+	}
+	if _, ok := byName["explicit-check"]["access"]; ok {
+		t.Error("explicit-check should not have access flag")
+	}
+
+	inh, ok := byName["inherited-check"]["inherited_from_defaults"].([]string)
+	if !ok {
+		t.Fatalf("inherited-check missing inherited_from_defaults: %+v", byName["inherited-check"])
+	}
+	want := []string{"grace", "ping_keys"}
+	if len(inh) != len(want) {
+		t.Fatalf("inherited names: got %v, want %v", inh, want)
+	}
+	for i := range want {
+		if inh[i] != want[i] {
+			t.Errorf("inherited[%d]: got %q, want %q", i, inh[i], want[i])
+		}
+	}
+	if _, ok := byName["explicit-check"]["inherited_from_defaults"]; ok {
+		t.Error("explicit-check should not have inherited_from_defaults")
+	}
+}
+
 func equalSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

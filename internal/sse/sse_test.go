@@ -190,8 +190,82 @@ func TestSSEBackpressureDrops(t *testing.T) {
 	for i := 0; i < subscriberQueueDepth+5; i++ {
 		bus.Publish(&engine.Transition{Slug: "x"})
 	}
-	if got := sub.missed.Load(); got < 5 {
-		t.Errorf("missed counter not advanced: %d", got)
+	from, to, has := sub.takeMissed()
+	if !has {
+		t.Fatal("no missed range recorded")
+	}
+	if got := to - from + 1; got < 5 {
+		t.Errorf("missed range too small: %d (from=%d to=%d)", got, from, to)
+	}
+}
+
+// TestSSEMissedEventReportsRange verifies the wire-level shape of the
+// `missed` event so a client can detect which sequence range to refetch.
+func TestSSEMissedEventReportsRange(t *testing.T) {
+	bus, url, cleanup := startBusServer(t)
+	defer cleanup()
+
+	// Open a streaming connection.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	br := bufio.NewReader(resp.Body)
+
+	deadline := time.Now().Add(time.Second)
+	for bus.Subscribers() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Reach directly into the single subscription and clog it, then
+	// publish over its capacity. The next time the reader drains, it
+	// should see a `missed` event before the next `transition`.
+	bus.mu.RLock()
+	var sub *subscription
+	for s := range bus.subs {
+		sub = s
+		break
+	}
+	bus.mu.RUnlock()
+	if sub == nil {
+		t.Fatal("no sub")
+	}
+
+	// Pre-fill the subscriber's queue so Publish drops.
+	for i := 0; i < subscriberQueueDepth; i++ {
+		sub.ch <- envelope{seq: 0, trans: engine.Transition{Slug: "filler"}}
+	}
+	// Publishes 1..3 land as drops because the queue is already full.
+	for i := 0; i < 3; i++ {
+		bus.Publish(&engine.Transition{Slug: "dropped"})
+	}
+	// Drain the filler so the reader can move to the next slot, where the
+	// missed event should be emitted.
+	for i := 0; i < subscriberQueueDepth; i++ {
+		<-sub.ch
+	}
+	// Publish one more so there's something the reader can consume after
+	// the missed event.
+	bus.Publish(&engine.Transition{Slug: "after"})
+
+	// Read until we see a missed event.
+	var sawMissed bool
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !sawMissed {
+		ev, data := readSSEEvent(t, br)
+		if ev == "missed" {
+			sawMissed = true
+			if !strings.Contains(data, `"from"`) || !strings.Contains(data, `"to"`) || !strings.Contains(data, `"count"`) {
+				t.Errorf("missed data missing fields: %q", data)
+			}
+		}
+	}
+	if !sawMissed {
+		t.Error("never saw a missed event after overflow")
 	}
 }
 

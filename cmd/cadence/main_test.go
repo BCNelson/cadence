@@ -138,6 +138,7 @@ checks:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = eng.Close() })
 
 	mux := http.NewServeMux()
 	registerRoutes(mux, reg, eng, st, bus)

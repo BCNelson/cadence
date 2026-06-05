@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"log/slog"
 	"time"
 
@@ -25,53 +24,83 @@ func (e *Engine) Tick(now time.Time) {
 		if !ok {
 			continue
 		}
-		e.tickOne(c, st, now)
+		if e.tickOne(c, st, now) {
+			if err := e.store.SetState(st); err != nil {
+				slog.Error("engine: persist state", "err", err, "slug", c.Slug)
+			}
+		}
 	}
 }
 
-// tickOne advances a single check at `now`. Caller holds the engine lock.
-func (e *Engine) tickOne(c *config.ResolvedCheck, st *store.CheckState, now time.Time) {
+// tickOne advances a single check at `now`. Returns true if the state
+// was mutated and the caller should persist it. Caller holds the engine
+// lock.
+func (e *Engine) tickOne(c *config.ResolvedCheck, st *store.CheckState, now time.Time) bool {
 	if st.Status == store.StatusPaused {
-		return
+		return false
 	}
 
 	// Open-run timeout takes precedence over schedule checks: a run that's
-	// blown its timeout fails the check immediately.
-	if st.Started && c.Timeout > 0 && now.Sub(st.RunStartedAt) > c.Timeout {
-		st.Started = false
-		st.RunStartedAt = time.Time{}
-		e.transitionLocked(c, st, store.StatusDown, now, "run timeout")
-		return
+	// blown its timeout fails the check immediately. When `timeout` isn't
+	// set explicitly, fall back to period+grace so /start runs can't be
+	// zombies forever; cron-only checks with no timeout still skip the
+	// sweep (no obvious upper bound).
+	if st.Started {
+		runTimeout := runTimeoutFor(c)
+		if runTimeout > 0 && now.Sub(st.RunStartedAt) > runTimeout {
+			st.Started = false
+			st.RunStartedAt = time.Time{}
+			e.transitionLocked(c, st, store.StatusDown, now, "run timeout")
+			return true
+		}
 	}
 
 	if st.Status == store.StatusNew {
 		// First-ping-never-happened state. Don't auto-down — wait for the
 		// service to introduce itself. This matches HC.io.
-		return
+		return false
 	}
 
 	deadline, ok := nextDeadline(c, e.cronFor(c), st.LastPing)
 	if !ok {
-		return
+		return false
 	}
 
 	switch st.Status {
 	case store.StatusUp:
 		if now.After(deadline.Add(c.Grace)) {
 			e.transitionLocked(c, st, store.StatusDown, now, "grace exhausted")
-			return
+			return true
 		}
 		if now.After(deadline) {
 			e.transitionLocked(c, st, store.StatusLate, now, "deadline missed")
+			return true
 		}
 	case store.StatusLate:
 		if now.After(deadline.Add(c.Grace)) {
 			e.transitionLocked(c, st, store.StatusDown, now, "grace exhausted")
+			return true
 		}
 	case store.StatusDown:
 		// Stays down until a success ping arrives. No further transitions
 		// on tick.
 	}
+	return false
+}
+
+// runTimeoutFor picks the effective open-run timeout. Explicit `timeout:`
+// wins; otherwise, period-based checks fall back to period+grace as an
+// implicit upper bound so `/start` without a closing ping eventually
+// rolls to down. Cron-only checks without an explicit timeout have no
+// natural fallback — those keep the no-timeout behavior.
+func runTimeoutFor(c *config.ResolvedCheck) time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	if c.Period > 0 {
+		return c.Period + c.Grace
+	}
+	return 0
 }
 
 // cronFor returns the parsed cron schedule for a check, or nil for
@@ -92,15 +121,17 @@ type cronSchedule interface {
 	Next(time.Time) time.Time
 }
 
-// transitionLocked records a status change: updates state, persists,
-// publishes to the bus, fires alerts. Caller holds the engine lock.
+// transitionLocked records a status change: updates in-memory state,
+// appends the event, publishes to the bus, and queues any alert. Does
+// NOT persist CheckState — the caller (Tick / HandlePing) owns persistence
+// so the contract stays simple: callers see the snapshot they wrote.
+// Caller holds the engine lock.
 func (e *Engine) transitionLocked(c *config.ResolvedCheck, st *store.CheckState, to store.Status, at time.Time, reason string) {
 	from := st.Status
 	if from == to {
-		// Still persist LastPing changes.
-		if err := e.store.SetState(st); err != nil {
-			slog.Error("engine: persist state", "err", err, "slug", c.Slug)
-		}
+		// No-op transition. State mutations the caller already made
+		// (e.g. Started=false on run timeout, LastPing on success ping)
+		// stay; the caller persists.
 		return
 	}
 	st.Status = to
@@ -109,9 +140,6 @@ func (e *Engine) transitionLocked(c *config.ResolvedCheck, st *store.CheckState,
 	ev := store.Event{At: at, From: from, To: to, Reason: reason}
 	if err := e.store.AppendEvent(c.UUID, &ev); err != nil {
 		slog.Error("engine: append event", "err", err, "slug", c.Slug)
-	}
-	if err := e.store.SetState(st); err != nil {
-		slog.Error("engine: persist state", "err", err, "slug", c.Slug)
 	}
 
 	trans := &Transition{
@@ -126,17 +154,13 @@ func (e *Engine) transitionLocked(c *config.ResolvedCheck, st *store.CheckState,
 
 	// Alerts. Fire once on entry to down; recovery on return to up from
 	// down. The single-fire is automatic because we only call this on a
-	// state CHANGE, not while down stays down.
-	ctx := context.Background()
+	// state CHANGE, not while down stays down. late->up is intentionally
+	// silent — late is a warning, not an alert state.
 	switch {
 	case to == store.StatusDown:
-		if err := e.alerter.Down(ctx, c, trans); err != nil {
-			slog.Error("engine: alert down", "err", err, "slug", c.Slug)
-		}
+		e.enqueueAlert("down", c, trans)
 	case to == store.StatusUp && from == store.StatusDown:
-		if err := e.alerter.Recover(ctx, c, trans); err != nil {
-			slog.Error("engine: alert recover", "err", err, "slug", c.Slug)
-		}
+		e.enqueueAlert("recover", c, trans)
 	}
 }
 

@@ -25,10 +25,22 @@ type Config struct {
 }
 
 type Server struct {
-	Listen   string  `yaml:"listen"`
-	BaseURL  string  `yaml:"base_url"`
-	UUIDSalt string  `yaml:"uuid_salt"`
-	APIKeys  APIKeys `yaml:"api_keys"`
+	Listen    string    `yaml:"listen"`
+	BaseURL   string    `yaml:"base_url"`
+	UUIDSalt  string    `yaml:"uuid_salt"`
+	APIKeys   APIKeys   `yaml:"api_keys"`
+	RateLimit RateLimit `yaml:"rate_limit"`
+}
+
+// RateLimit caps inbound /ping/ requests so a misconfigured client (or a
+// hostile one) can't exhaust CPU and storage. Zero means unlimited.
+//
+// PerCheckPerMinute applies to accepted pings keyed by check UUID.
+// AuthFailPerIPPerMinute applies to failed-auth attempts keyed by client
+// IP — a flooder probing slugs/keys gets cut off after the limit.
+type RateLimit struct {
+	PerCheckPerMinute      int `yaml:"per_check_per_minute"`
+	AuthFailPerIPPerMinute int `yaml:"auth_fail_per_ip_per_minute"`
 }
 
 type APIKeys struct {

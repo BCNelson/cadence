@@ -8,8 +8,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 )
+
+// cronParser matches the parser the engine uses for runtime scheduling.
+// Validating at load time means configtool catches bad expressions before
+// the daemon ever starts.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 // Options control loader behavior. Zero value gives the production defaults.
 type Options struct {
@@ -149,15 +155,42 @@ func resolveCheck(c *Check, def *Defaults, reg *Registry) (*ResolvedCheck, error
 		return nil, fmt.Errorf("config: duplicate check slug %q", c.Slug)
 	}
 
+	// Negative durations are always wrong. Catch them with a precise error
+	// before the period/cron XOR check, which would otherwise report a
+	// misleading "must specify exactly one of period or cron" for a typo
+	// like `period: -5m`.
+	if c.Period < 0 {
+		return nil, fmt.Errorf("config: check %q period must be non-negative, got %s", c.Slug, time.Duration(c.Period))
+	}
+	if c.Grace < 0 {
+		return nil, fmt.Errorf("config: check %q grace must be non-negative, got %s", c.Slug, time.Duration(c.Grace))
+	}
+	if c.Timeout < 0 {
+		return nil, fmt.Errorf("config: check %q timeout must be non-negative, got %s", c.Slug, time.Duration(c.Timeout))
+	}
+
 	hasPeriod := c.Period > 0
 	hasCron := c.Cron != ""
 	if hasPeriod == hasCron {
 		return nil, fmt.Errorf("config: check %q must specify exactly one of period or cron", c.Slug)
 	}
+	if hasCron {
+		if _, err := cronParser.Parse(c.Cron); err != nil {
+			return nil, fmt.Errorf("config: check %q cron %q: %w", c.Slug, c.Cron, err)
+		}
+	}
 
+	// ping_keys distinguishes three forms:
+	//   - omitted (nil)  -> inherit defaults.ping_keys
+	//   - [] (non-nil, len 0) -> explicitly OPEN, UUID-only
+	//   - [a, b, ...] -> closed, listed keys authorize
+	// The nil/[] difference is load-bearing; configtool surfaces OPEN
+	// checks so an accidental `ping_keys: []` is visible at a glance.
 	pingKeys := c.PingKeys
+	pingKeysInherited := false
 	if pingKeys == nil {
 		pingKeys = def.PingKeys
+		pingKeysInherited = pingKeys != nil
 	}
 	for _, name := range pingKeys {
 		if _, ok := reg.PingKeys[name]; !ok {
@@ -166,8 +199,10 @@ func resolveCheck(c *Check, def *Defaults, reg *Registry) (*ResolvedCheck, error
 	}
 
 	channels := c.Channels
+	channelsInherited := false
 	if channels == nil {
 		channels = def.Channels
+		channelsInherited = channels != nil
 	}
 	for _, name := range channels {
 		if _, ok := reg.Channels[name]; !ok {
@@ -176,12 +211,16 @@ func resolveCheck(c *Check, def *Defaults, reg *Registry) (*ResolvedCheck, error
 	}
 
 	grace := time.Duration(c.Grace)
-	if grace == 0 {
+	graceInherited := false
+	if c.Grace == 0 && def.Grace != 0 {
 		grace = time.Duration(def.Grace)
+		graceInherited = true
 	}
 	timeout := time.Duration(c.Timeout)
-	if timeout == 0 {
+	timeoutInherited := false
+	if c.Timeout == 0 && def.Timeout != 0 {
 		timeout = time.Duration(def.Timeout)
+		timeoutInherited = true
 	}
 
 	enabled := true
@@ -215,5 +254,11 @@ func resolveCheck(c *Check, def *Defaults, reg *Registry) (*ResolvedCheck, error
 		Tags:       c.Tags,
 		Enabled:    enabled,
 		PinnedUUID: pinned,
+		Inherited: Inherited{
+			Grace:    graceInherited,
+			Timeout:  timeoutInherited,
+			PingKeys: pingKeysInherited,
+			Channels: channelsInherited,
+		},
 	}, nil
 }

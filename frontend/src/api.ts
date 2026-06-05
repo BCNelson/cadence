@@ -9,7 +9,7 @@ export interface Check {
   name?: string
   tags: string
   status: CheckStatus
-  started: boolean
+  has_open_run: boolean
   last_ping?: string | null
   next_ping?: string | null
   grace: number

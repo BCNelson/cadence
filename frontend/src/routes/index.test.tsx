@@ -22,7 +22,7 @@ function mkCheck(over: Partial<Check>): Check {
     slug: 'x',
     tags: '',
     status: 'up',
-    started: false,
+    has_open_run: false,
     grace: 60,
     n_pings: 0,
     ...over,

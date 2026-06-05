@@ -46,6 +46,7 @@ func newPingHarness(t *testing.T, yaml string) *pingHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = eng.Close() })
 	h := NewPingHandler(reg, eng, st)
 	mux := http.NewServeMux()
 	for _, r := range h.Routes() {
@@ -85,8 +86,8 @@ checks:
 	if rr.Code != http.StatusOK {
 		t.Fatalf("correct key: got %d body=%q", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("Ping-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
-		t.Errorf("Ping-Body-Limit: got %q", got)
+	if got := rr.Header().Get("X-Cadence-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
+		t.Errorf("X-Cadence-Body-Limit: got %q", got)
 	}
 	// Engine should now be up.
 	c := h.reg.CheckBySlug("api")
@@ -213,9 +214,9 @@ checks:
 	if rr.Code != http.StatusOK {
 		t.Fatalf("/log: got %d", rr.Code)
 	}
-	limit, _ := strconv.Atoi(rr.Header().Get("Ping-Body-Limit"))
+	limit, _ := strconv.Atoi(rr.Header().Get("X-Cadence-Body-Limit"))
 	if limit != store.DefaultMaxBodyBytes {
-		t.Errorf("Ping-Body-Limit: got %d", limit)
+		t.Errorf("X-Cadence-Body-Limit: got %d", limit)
 	}
 	c := h.reg.CheckBySlug("api")
 	pings, _ := h.store.RecentPings(c.UUID, 0)
@@ -255,6 +256,30 @@ checks:
 	got, _ := io.ReadAll(rr.Body)
 	if string(got) != "OK" {
 		t.Errorf("body: got %q", string(got))
+	}
+}
+
+func TestPingRateLimitReturns429(t *testing.T) {
+	h := newPingHarness(t, `
+server:
+  uuid_salt: "s"
+  rate_limit:
+    per_check_per_minute: 2
+ping_keys: [{name: ops, key: "k"}]
+checks:
+  - { slug: api, period: 1h, ping_keys: [ops] }
+`)
+	hdrs := map[string]string{"X-Ping-Key": "k"}
+
+	// Two accepted (burst budget = 2).
+	for i := 0; i < 2; i++ {
+		if rr := h.do("GET", "/ping/api", "", hdrs); rr.Code != http.StatusOK {
+			t.Fatalf("burst %d: got %d", i, rr.Code)
+		}
+	}
+	// Third hits the cap.
+	if rr := h.do("GET", "/ping/api", "", hdrs); rr.Code != http.StatusTooManyRequests {
+		t.Errorf("overrun: got %d, want 429", rr.Code)
 	}
 }
 

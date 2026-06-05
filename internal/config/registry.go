@@ -45,6 +45,21 @@ type ResolvedCheck struct {
 	// rather than being derived. UUID-form pings against a check with a
 	// pinned UUID are authorized regardless of ping_keys.
 	PinnedUUID bool
+
+	// Inherited records which inheritable fields took their value from
+	// `defaults:` rather than the check itself. Used by configtool to
+	// surface where each field came from, so operators can see overlay
+	// effects without diffing YAML by hand.
+	Inherited Inherited
+}
+
+// Inherited flags inheritable fields whose value came from the global
+// `defaults:` block. False means the check declared the value itself.
+type Inherited struct {
+	Grace    bool
+	Timeout  bool
+	PingKeys bool
+	Channels bool
 }
 
 // CheckBySlug returns the check with the given slug, or nil.

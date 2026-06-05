@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -42,7 +43,6 @@ func (f *repeatableFlag) Set(v string) error { *f = append(*f, v); return nil }
 func main() {
 	var paths repeatableFlag
 	flag.Var(&paths, "c", "configuration file or directory (repeat for layering, left -> right)")
-	flag.Var(&paths, "config", "alias for -c")
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -55,7 +55,10 @@ func main() {
 	slog.SetDefault(logger)
 
 	if len(paths) == 0 {
-		logger.Error("at least one -c <path> is required")
+		// Print usage too so a first-time user can see the available
+		// flags without re-running with -h.
+		fmt.Fprintln(os.Stderr, "cadence: at least one -c <config-path> is required")
+		flag.Usage()
 		os.Exit(2)
 	}
 
@@ -76,6 +79,14 @@ func run(paths []string) error {
 	dataDir := reg.DataDir
 	if dataDir == "" {
 		dataDir = "./data"
+	}
+	if !filepath.IsAbs(dataDir) {
+		// In a container or systemd unit, a relative path lands wherever
+		// the working dir happens to be — almost never what the operator
+		// wants for persistent state. Warn but don't refuse, since local
+		// dev does want this.
+		slog.Warn("data_dir is a relative path; persistent state will be under the daemon's working directory",
+			"data_dir", dataDir)
 	}
 	st, err := store.Open(dataDir, store.Options{
 		MaxPings:  reg.Retention.Pings,
@@ -100,6 +111,11 @@ func run(paths []string) error {
 	if err != nil {
 		return fmt.Errorf("engine: %w", err)
 	}
+	defer func() {
+		if err := eng.Close(); err != nil {
+			slog.Error("engine close", "err", err)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	registerRoutes(mux, reg, eng, st, bus)
@@ -125,7 +141,7 @@ func run(paths []string) error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("listening", "addr", listen, "checks", len(reg.Checks))
+		slog.Info("listening", "addr", listen, "checks", len(reg.Checks), "data_dir", dataDir)
 		serverErr <- srv.ListenAndServe()
 	}()
 

@@ -60,6 +60,7 @@ func (h *MgmtHandler) Routes() []Route {
 func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
 	kind := Authenticate(h.registry, r)
 	if kind == KeyNone {
+		writeAuthChallenge(w)
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -76,6 +77,7 @@ func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
 func (h *MgmtHandler) getCheck(w http.ResponseWriter, r *http.Request) {
 	kind := Authenticate(h.registry, r)
 	if kind == KeyNone {
+		writeAuthChallenge(w)
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -116,6 +118,7 @@ func (h *MgmtHandler) resolveCheck(id string) (*config.ResolvedCheck, error) {
 func (h *MgmtHandler) writeRejected(op string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if Authenticate(h.registry, r) == KeyNone {
+			writeAuthChallenge(w)
 			writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 			return
 		}
@@ -126,19 +129,24 @@ func (h *MgmtHandler) writeRejected(op string) http.HandlerFunc {
 
 // checkView is the JSON shape returned by the read endpoints. Fields are
 // modeled after HC.io v3 so existing clients/dashboards can consume them.
+//
+// `has_open_run` is cadence-specific (HC.io reports `status: "started"`
+// instead of a separate boolean). The name is explicit about meaning
+// "a /start ping opened a run that hasn't closed yet," rather than the
+// ambiguous `started`.
 type checkView struct {
-	Name     string  `json:"name,omitempty"`
-	Slug     string  `json:"slug"`
-	Tags     string  `json:"tags"` // space-separated, HC.io convention
-	Status   string  `json:"status"`
-	Started  bool    `json:"started"`
-	LastPing *string `json:"last_ping,omitempty"`
-	NextPing *string `json:"next_ping,omitempty"`
-	Grace    int64   `json:"grace"`
-	Schedule string  `json:"schedule,omitempty"`
-	Timezone string  `json:"timezone,omitempty"`
-	Timeout  int64   `json:"timeout,omitempty"`
-	NPings   int     `json:"n_pings"`
+	Name       string  `json:"name,omitempty"`
+	Slug       string  `json:"slug"`
+	Tags       string  `json:"tags"` // space-separated, HC.io convention
+	Status     string  `json:"status"`
+	HasOpenRun bool    `json:"has_open_run"`
+	LastPing   *string `json:"last_ping,omitempty"`
+	NextPing   *string `json:"next_ping,omitempty"`
+	Grace      int64   `json:"grace"`
+	Schedule   string  `json:"schedule,omitempty"`
+	Timezone   string  `json:"timezone,omitempty"`
+	Timeout    int64   `json:"timeout,omitempty"`
+	NPings     int     `json:"n_pings"`
 
 	// Read-write-only fields. Pointer types so omitempty drops them
 	// cleanly on read-only responses.
@@ -152,12 +160,12 @@ type checkView struct {
 func (h *MgmtHandler) buildView(c *config.ResolvedCheck, kind KeyKind) checkView {
 	snap, _ := h.engine.Snapshot(c.UUID)
 	v := checkView{
-		Name:    c.Name,
-		Slug:    c.Slug,
-		Tags:    strings.Join(c.Tags, " "),
-		Status:  apiStatus(snap.Status),
-		Started: snap.Started,
-		Grace:   int64(c.Grace.Seconds()),
+		Name:       c.Name,
+		Slug:       c.Slug,
+		Tags:       strings.Join(c.Tags, " "),
+		Status:     apiStatus(snap.Status),
+		HasOpenRun: snap.Started,
+		Grace:      int64(c.Grace.Seconds()),
 	}
 	if !snap.LastPing.IsZero() {
 		s := snap.LastPing.UTC().Format(time.RFC3339)

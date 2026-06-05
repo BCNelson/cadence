@@ -45,11 +45,9 @@ func (e *Engine) HandlePing(u uuid.UUID, req *PingRequest) error {
 		e.states[u] = cur
 	}
 
-	prevStatus := cur.Status
-
 	// Paused checks ignore pings entirely. A paused check can't pingactivate
 	// itself — it has to be unpaused in config.
-	if prevStatus == store.StatusPaused {
+	if cur.Status == store.StatusPaused {
 		return nil
 	}
 
@@ -84,7 +82,9 @@ func (e *Engine) HandlePing(u uuid.UUID, req *PingRequest) error {
 		return fmt.Errorf("engine: append ping: %w", err)
 	}
 
-	// Apply state transitions based on the ping kind.
+	// Apply state transitions based on the ping kind. transitionLocked
+	// updates in-memory state but does not persist — we always SetState
+	// below so LastPing and any Started toggle land on disk in one call.
 	switch req.Kind {
 	case store.PingStart:
 		cur.Started = true
@@ -113,11 +113,8 @@ func (e *Engine) HandlePing(u uuid.UUID, req *PingRequest) error {
 		// design, log pings are observational only.
 	}
 
-	if cur.Status == prevStatus {
-		// No transition; still persist the updated LastPing.
-		if err := e.store.SetState(cur); err != nil {
-			return fmt.Errorf("engine: persist state: %w", err)
-		}
+	if err := e.store.SetState(cur); err != nil {
+		return fmt.Errorf("engine: persist state: %w", err)
 	}
 	return nil
 }

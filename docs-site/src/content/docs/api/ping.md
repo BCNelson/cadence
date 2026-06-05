@@ -28,7 +28,7 @@ Wrong key, unknown slug, missing check, wrong UUID all return **404**, not 403. 
 The request body is captured and stored as part of the ping log, capped at the store's `MaxBodyBytes`. Cadence advertises the cap via response header:
 
 ```
-Ping-Body-Limit: 10000
+X-Cadence-Body-Limit: 10000
 ```
 
 Bodies over the cap are truncated; the stored ping is flagged as truncated for the dashboard.

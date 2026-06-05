@@ -36,7 +36,7 @@ export function CheckRow({ check }: { check: Check }) {
     <tr className="border-b border-slate-200 last:border-0 hover:bg-slate-50">
       <td className="py-3 pl-4 pr-2">
         <StatusBadge status={check.status} />
-        {check.started && (
+        {check.has_open_run && (
           <span className="ml-2 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">
             RUNNING
           </span>

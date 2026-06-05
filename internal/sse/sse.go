@@ -3,8 +3,9 @@
 //
 // Backpressure: each subscriber has a small bounded queue. If a
 // subscriber falls behind, additional events are dropped for THAT
-// subscriber only (a "missed N events" SSE is emitted on the next slot
-// they free up). The engine never blocks waiting for slow clients.
+// subscriber only (a "missed" SSE is emitted with the dropped sequence
+// range so the client can re-fetch just the affected window from the
+// read API). The engine never blocks waiting for slow clients.
 package sse
 
 import (
@@ -29,18 +30,33 @@ const (
 type Bus struct {
 	mu   sync.RWMutex
 	subs map[*subscription]struct{}
+
+	// seq is a process-monotonic counter stamped onto every published
+	// transition. Clients use it to detect gaps after a `missed` event
+	// and refetch only the affected window from the read API.
+	seq atomic.Uint64
 }
 
 func NewBus() *Bus {
 	return &Bus{subs: make(map[*subscription]struct{})}
 }
 
-// subscription is one connected client. The bus enqueues events into ch;
-// missed counts events dropped due to a full queue so the client gets a
-// resync hint when they next have room.
+// envelope is what the bus enqueues for each subscriber: the transition
+// plus its monotonic sequence number.
+type envelope struct {
+	seq   uint64
+	trans engine.Transition
+}
+
+// subscription is one connected client. The bus enqueues envelopes into
+// ch; missedFrom / missedTo bound the seq range of events that didn't
+// fit so the client gets a precise resync hint on the next slot.
 type subscription struct {
-	ch     chan engine.Transition
-	missed atomic.Int64
+	ch         chan envelope
+	missedMu   sync.Mutex
+	missedFrom uint64
+	missedTo   uint64
+	missedAny  bool
 }
 
 // Publish fans an event out to every subscriber. Per the engine.EventBus
@@ -49,19 +65,44 @@ func (b *Bus) Publish(t *engine.Transition) {
 	if t == nil {
 		return
 	}
+	seq := b.seq.Add(1)
+	env := envelope{seq: seq, trans: *t}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for s := range b.subs {
 		select {
-		case s.ch <- *t:
+		case s.ch <- env:
 		default:
-			s.missed.Add(1)
+			s.recordMissed(seq)
 		}
 	}
 }
 
+func (s *subscription) recordMissed(seq uint64) {
+	s.missedMu.Lock()
+	defer s.missedMu.Unlock()
+	if !s.missedAny {
+		s.missedFrom = seq
+		s.missedAny = true
+	}
+	s.missedTo = seq
+}
+
+// takeMissed returns and clears the pending missed-range, if any.
+func (s *subscription) takeMissed() (from, to uint64, ok bool) {
+	s.missedMu.Lock()
+	defer s.missedMu.Unlock()
+	if !s.missedAny {
+		return 0, 0, false
+	}
+	from, to = s.missedFrom, s.missedTo
+	s.missedAny = false
+	s.missedFrom, s.missedTo = 0, 0
+	return from, to, true
+}
+
 func (b *Bus) subscribe() *subscription {
-	s := &subscription{ch: make(chan engine.Transition, subscriberQueueDepth)}
+	s := &subscription{ch: make(chan envelope, subscriberQueueDepth)}
 	b.mu.Lock()
 	b.subs[s] = struct{}{}
 	b.mu.Unlock()
@@ -111,22 +152,48 @@ func (b *Bus) Handler() http.HandlerFunc {
 			select {
 			case <-ctx.Done():
 				return
-			case ev, ok := <-s.ch:
+			case env, ok := <-s.ch:
 				if !ok {
 					return
 				}
-				if missed := s.missed.Swap(0); missed > 0 {
-					// Inform the client of dropped events so they can
-					// resync from the read API if they care.
-					_, _ = fmt.Fprintf(w, "event: missed\ndata: {\"count\": %d}\n\n", missed)
+				if from, to, has := s.takeMissed(); has {
+					// Inform the client of the dropped sequence range so
+					// they can refetch the affected window from the
+					// management API instead of doing a full re-list.
+					count := to - from + 1
+					_, _ = fmt.Fprintf(w, "event: missed\ndata: {\"from\":%d,\"to\":%d,\"count\":%d}\n\n", from, to, count)
 				}
-				payload, err := json.Marshal(ev)
+				payload, err := json.Marshal(&transitionWithSeq{seq: env.seq, Transition: env.trans})
 				if err != nil {
 					continue
 				}
-				_, _ = fmt.Fprintf(w, "event: transition\ndata: %s\n\n", payload)
+				_, _ = fmt.Fprintf(w, "id: %d\nevent: transition\ndata: %s\n\n", env.seq, payload)
 				flusher.Flush()
 			}
 		}
 	}
+}
+
+// transitionWithSeq adds the `seq` JSON field to engine.Transition so
+// clients reading the data payload don't have to parse the SSE `id:`
+// line themselves. The seq value also lands on the SSE `id:` for
+// EventSource's built-in Last-Event-ID semantics.
+type transitionWithSeq struct {
+	engine.Transition
+	seq uint64
+}
+
+func (t *transitionWithSeq) MarshalJSON() ([]byte, error) {
+	// Embed the seq into the Transition payload alongside the existing
+	// fields. Using a local alias avoids infinite recursion through
+	// MarshalJSON.
+	type alias engine.Transition
+	wrap := struct {
+		Seq uint64 `json:"seq"`
+		alias
+	}{
+		Seq:   t.seq,
+		alias: alias(t.Transition),
+	}
+	return json.Marshal(wrap)
 }

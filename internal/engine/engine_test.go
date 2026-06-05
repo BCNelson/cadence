@@ -41,6 +41,18 @@ func openStore(t *testing.T) *store.Store {
 	return s
 }
 
+// newEngine wraps New with a t.Cleanup that stops the alert worker, so
+// individual tests don't leak goroutines under -race.
+func newEngine(t *testing.T, reg *config.Registry, st *store.Store, opts Options) *Engine {
+	t.Helper()
+	e, err := New(reg, st, opts)
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+	return e
+}
+
 // recordingAlerter captures every alert so tests can assert on call sites.
 type recordingAlerter struct {
 	mu       sync.Mutex
@@ -112,10 +124,7 @@ checks:
 	alerter := &recordingAlerter{}
 	bus := &recordingBus{}
 
-	e, err := New(reg, st, Options{Bus: bus, Alerter: alerter, Now: now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	e := newEngine(t, reg, st, Options{Bus: bus, Alerter: alerter, Now: now})
 
 	c := reg.CheckBySlug("api")
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusNew {
@@ -130,6 +139,7 @@ checks:
 	if snap.Status != store.StatusUp {
 		t.Errorf("after success ping: status %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 0 || alerter.recoverCount() != 0 {
 		t.Errorf("first-success should not alert: %+v / %+v", alerter.downs, alerter.recovers)
 	}
@@ -145,10 +155,7 @@ checks:
 	base := time.Unix(1_700_000_000, 0).UTC()
 	now, setNow := fixedClock(base)
 	alerter := &recordingAlerter{}
-	e, err := New(reg, st, Options{Now: now, Alerter: alerter})
-	if err != nil {
-		t.Fatal(err)
-	}
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	// Start in up by sending a success.
@@ -169,6 +176,7 @@ checks:
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusLate {
 		t.Errorf("past deadline: %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 0 {
 		t.Error("late should not alert")
 	}
@@ -179,6 +187,7 @@ checks:
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusDown {
 		t.Errorf("past grace: %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Errorf("down alert count: got %d, want 1", alerter.downCount())
 	}
@@ -188,6 +197,7 @@ checks:
 	e.Tick(now())
 	setNow(base.Add(30 * time.Minute))
 	e.Tick(now())
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Errorf("repeat ticks alerted again: got %d, want 1", alerter.downCount())
 	}
@@ -203,12 +213,13 @@ checks:
 	base := time.Unix(1_700_000_000, 0).UTC()
 	now, setNow := fixedClock(base)
 	alerter := &recordingAlerter{}
-	e, _ := New(reg, st, Options{Now: now, Alerter: alerter})
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingSuccess})
 	setNow(base.Add(20 * time.Minute))
 	e.Tick(now())
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Fatalf("setup: want down, got %d alerts", alerter.downCount())
 	}
@@ -220,6 +231,7 @@ checks:
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusUp {
 		t.Errorf("recovery status: %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.recoverCount() != 1 {
 		t.Errorf("want 1 recovery alert, got %d", alerter.recoverCount())
 	}
@@ -234,7 +246,7 @@ checks:
 	st := openStore(t)
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
 	alerter := &recordingAlerter{}
-	e, _ := New(reg, st, Options{Now: now, Alerter: alerter})
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingSuccess})
@@ -244,6 +256,7 @@ checks:
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusDown {
 		t.Errorf("after fail: %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Errorf("want 1 down alert, got %d", alerter.downCount())
 	}
@@ -252,6 +265,7 @@ checks:
 	if err := e.HandlePing(c.UUID, &PingRequest{Kind: store.PingFail}); err != nil {
 		t.Fatal(err)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Errorf("repeat fail alerted again: got %d", alerter.downCount())
 	}
@@ -266,7 +280,7 @@ checks:
 	st := openStore(t)
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
 	alerter := &recordingAlerter{}
-	e, _ := New(reg, st, Options{Now: now, Alerter: alerter})
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingExit, ExitCode: 0})
@@ -288,7 +302,7 @@ checks:
 	st := openStore(t)
 	base := time.Unix(1_700_000_000, 0).UTC()
 	now, setNow := fixedClock(base)
-	e, _ := New(reg, st, Options{Now: now})
+	e := newEngine(t, reg, st, Options{Now: now})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingStart})
@@ -322,7 +336,7 @@ checks:
 	base := time.Unix(1_700_000_000, 0).UTC()
 	now, setNow := fixedClock(base)
 	alerter := &recordingAlerter{}
-	e, _ := New(reg, st, Options{Now: now, Alerter: alerter})
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingStart})
@@ -335,8 +349,50 @@ checks:
 	if snap.Started {
 		t.Error("Started should clear on timeout")
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Errorf("want 1 timeout alert, got %d", alerter.downCount())
+	}
+}
+
+// TestRunTimeoutFallsBackToPeriodPlusGrace covers C2: a check with no
+// explicit `timeout:` still rolls a /start run to down once period+grace
+// elapses, instead of leaving the run open forever.
+func TestRunTimeoutFallsBackToPeriodPlusGrace(t *testing.T) {
+	reg := loadRegistry(t, `
+server: { uuid_salt: "s" }
+checks:
+  - { slug: api, period: 10m, grace: 2m }
+`)
+	st := openStore(t)
+	base := time.Unix(1_700_000_000, 0).UTC()
+	now, setNow := fixedClock(base)
+	alerter := &recordingAlerter{}
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
+	c := reg.CheckBySlug("api")
+
+	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingStart})
+
+	// 11 minutes in: still within period+grace (12m). Run stays open.
+	setNow(base.Add(11 * time.Minute))
+	e.Tick(now())
+	if snap, _ := e.Snapshot(c.UUID); !snap.Started {
+		t.Error("run closed too early")
+	}
+
+	// 13 minutes in: past period+grace; the fallback timeout fires.
+	setNow(base.Add(13 * time.Minute))
+	e.Tick(now())
+	snap, _ := e.Snapshot(c.UUID)
+	if snap.Status != store.StatusDown {
+		t.Errorf("after fallback timeout: %q", snap.Status)
+	}
+	if snap.Started {
+		t.Error("Started should clear on fallback timeout")
+	}
+	e.WaitAlerts()
+	if alerter.downCount() != 1 {
+		t.Errorf("want 1 down alert, got %d", alerter.downCount())
 	}
 }
 
@@ -350,7 +406,7 @@ checks:
 	base := time.Unix(1_700_000_000, 0).UTC()
 	now, setNow := fixedClock(base)
 	alerter := &recordingAlerter{}
-	e, _ := New(reg, st, Options{Now: now, Alerter: alerter})
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusPaused {
@@ -367,6 +423,7 @@ checks:
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusPaused {
 		t.Errorf("after tick: %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 0 {
 		t.Errorf("paused alerted: %d", alerter.downCount())
 	}
@@ -380,7 +437,7 @@ checks:
 `)
 	st := openStore(t)
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
-	e, _ := New(reg, st, Options{Now: now})
+	e := newEngine(t, reg, st, Options{Now: now})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingSuccess})
@@ -407,7 +464,7 @@ checks:
 `)
 	st := openStore(t)
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
-	e, _ := New(reg, st, Options{Now: now})
+	e := newEngine(t, reg, st, Options{Now: now})
 
 	err := e.HandlePing(uuid.New(), &PingRequest{Kind: store.PingSuccess})
 	if !errors.Is(err, ErrUnknownCheck) {
@@ -428,7 +485,7 @@ checks:
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	now, setNow := fixedClock(base)
 	alerter := &recordingAlerter{}
-	e, _ := New(reg, st, Options{Now: now, Alerter: alerter})
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
 	c := reg.CheckBySlug("api")
 
 	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingSuccess})
@@ -454,8 +511,78 @@ checks:
 	if snap, _ := e.Snapshot(c.UUID); snap.Status != store.StatusDown {
 		t.Errorf("past grace: %q", snap.Status)
 	}
+	e.WaitAlerts()
 	if alerter.downCount() != 1 {
 		t.Errorf("want 1 down alert, got %d", alerter.downCount())
+	}
+}
+
+// TestSlugRenameStartsFreshHistory protects the design invariant from
+// the design-decisions memory: a slug rename produces a new UUID, and
+// the new check's history starts empty rather than reusing the prior
+// slug's state. The prior slug's data stays addressable in the store
+// (by its still-valid UUID), so a roll-back rename re-finds it.
+func TestSlugRenameStartsFreshHistory(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// First registry: original slug.
+	originalYAML := `
+server: { uuid_salt: "s" }
+checks:
+  - { slug: api, period: 1h }
+`
+	reg1 := loadRegistry(t, originalYAML)
+	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
+	e1 := newEngine(t, reg1, st, Options{Now: now})
+
+	origCheck := reg1.CheckBySlug("api")
+	if err := e1.HandlePing(origCheck.UUID, &PingRequest{Kind: store.PingSuccess}); err != nil {
+		t.Fatal(err)
+	}
+	origUUID := origCheck.UUID
+	origPings, err := st.RecentPings(origUUID, 0)
+	if err != nil || len(origPings) != 1 {
+		t.Fatalf("setup pings: got %d, err %v", len(origPings), err)
+	}
+
+	// Second registry: same salt, renamed slug. UUIDv5(salt, slug) means
+	// the renamed check derives a different UUID.
+	renamedYAML := `
+server: { uuid_salt: "s" }
+checks:
+  - { slug: api-v2, period: 1h }
+`
+	reg2 := loadRegistry(t, renamedYAML)
+	e2 := newEngine(t, reg2, st, Options{Now: now})
+
+	renamedCheck := reg2.CheckBySlug("api-v2")
+	if renamedCheck == nil {
+		t.Fatal("renamed check missing from registry")
+	}
+	if renamedCheck.UUID == origUUID {
+		t.Fatal("rename did not change UUID — DeriveUUID is broken")
+	}
+
+	// Renamed check has no history.
+	renamedPings, _ := st.RecentPings(renamedCheck.UUID, 0)
+	if len(renamedPings) != 0 {
+		t.Errorf("renamed check should start empty: got %d pings", len(renamedPings))
+	}
+	snap, ok := e2.Snapshot(renamedCheck.UUID)
+	if !ok || snap.Status != store.StatusNew {
+		t.Errorf("renamed check status: ok=%v status=%q", ok, snap.Status)
+	}
+
+	// Original UUID's history is still there — a rollback rename would
+	// re-discover it intact.
+	stillPings, _ := st.RecentPings(origUUID, 0)
+	if len(stillPings) != 1 {
+		t.Errorf("original history was destroyed: got %d pings (want 1)", len(stillPings))
 	}
 }
 
@@ -472,7 +599,7 @@ checks:
 		t.Fatal(err)
 	}
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
-	e1, _ := New(reg, st1, Options{Now: now})
+	e1 := newEngine(t, reg, st1, Options{Now: now})
 	c := reg.CheckBySlug("api")
 	_ = e1.HandlePing(c.UUID, &PingRequest{Kind: store.PingSuccess})
 	_ = st1.Close()
@@ -484,7 +611,7 @@ checks:
 		t.Fatal(err)
 	}
 	defer func() { _ = st2.Close() }()
-	e2, _ := New(reg2, st2, Options{Now: now})
+	e2 := newEngine(t, reg2, st2, Options{Now: now})
 	c2 := reg2.CheckBySlug("api")
 	snap, _ := e2.Snapshot(c2.UUID)
 	if snap.Status != store.StatusUp {
@@ -501,10 +628,7 @@ checks:
 `)
 	st := openStore(t)
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
-	e, err := New(reg, st, Options{Now: now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	e := newEngine(t, reg, st, Options{Now: now})
 
 	api := reg.CheckBySlug("api")
 	worker := reg.CheckBySlug("worker")
@@ -558,7 +682,7 @@ checks:
 `)
 	st := openStore(t)
 	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
-	e, _ := New(reg, st, Options{Now: now})
+	e := newEngine(t, reg, st, Options{Now: now})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -576,3 +700,78 @@ checks:
 		t.Fatal("Run did not return after context cancel")
 	}
 }
+
+// TestAlertDispatchDoesNotBlockEngineLock covers C1: a slow Alerter must
+// not stall the engine. We dispatch a transition, then immediately observe
+// that an unrelated Snapshot returns without waiting for the alert to
+// complete.
+func TestAlertDispatchDoesNotBlockEngineLock(t *testing.T) {
+	reg := loadRegistry(t, `
+server: { uuid_salt: "s" }
+checks:
+  - { slug: api, period: 10m }
+`)
+	st := openStore(t)
+	now, _ := fixedClock(time.Unix(1_700_000_000, 0).UTC())
+
+	release := make(chan struct{})
+	alerter := &blockingAlerter{release: release}
+	e := newEngine(t, reg, st, Options{Now: now, Alerter: alerter})
+	c := reg.CheckBySlug("api")
+
+	// Push the check into down; the alerter goroutine will start dispatching
+	// and block on `release`.
+	_ = e.HandlePing(c.UUID, &PingRequest{Kind: store.PingSuccess})
+	if err := e.HandlePing(c.UUID, &PingRequest{Kind: store.PingFail}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Snapshot must return immediately even while the alerter is blocked.
+	// If transitionLocked were still calling the alerter under e.mu, this
+	// would deadlock until the test timeout.
+	done := make(chan struct{})
+	go func() {
+		_, _ = e.Snapshot(c.UUID)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Snapshot stalled while alert was in flight")
+	}
+
+	close(release)
+	e.WaitAlerts()
+	if got := alerter.calls.Load(); got != 1 {
+		t.Errorf("alerter Down calls: got %d, want 1", got)
+	}
+}
+
+// blockingAlerter holds Down until the caller closes release. Used to
+// prove the engine doesn't pin its lock during dispatch.
+type blockingAlerter struct {
+	release chan struct{}
+	calls   atomicInt
+}
+
+func (b *blockingAlerter) Down(ctx context.Context, _ *config.ResolvedCheck, _ *Transition) error {
+	b.calls.Add(1)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+func (b *blockingAlerter) Recover(context.Context, *config.ResolvedCheck, *Transition) error {
+	return nil
+}
+
+// atomicInt is a tiny sync wrapper to avoid pulling sync/atomic into the
+// test file twice; named for readability at call sites.
+type atomicInt struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (a *atomicInt) Add(d int) { a.mu.Lock(); a.n += d; a.mu.Unlock() }
+func (a *atomicInt) Load() int { a.mu.Lock(); defer a.mu.Unlock(); return a.n }

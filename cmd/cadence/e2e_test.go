@@ -125,21 +125,21 @@ type ssePayload struct {
 }
 
 type checkView struct {
-	Name      string  `json:"name,omitempty"`
-	Slug      string  `json:"slug"`
-	Tags      string  `json:"tags"`
-	Status    string  `json:"status"`
-	Started   bool    `json:"started"`
-	LastPing  *string `json:"last_ping,omitempty"`
-	NextPing  *string `json:"next_ping,omitempty"`
-	Grace     int64   `json:"grace"`
-	Schedule  string  `json:"schedule,omitempty"`
-	Timezone  string  `json:"timezone,omitempty"`
-	Timeout   int64   `json:"timeout,omitempty"`
-	NPings    int     `json:"n_pings"`
-	PingURL   *string `json:"ping_url,omitempty"`
-	Channels  *string `json:"channels,omitempty"`
-	UniqueKey string  `json:"unique_key,omitempty"`
+	Name       string  `json:"name,omitempty"`
+	Slug       string  `json:"slug"`
+	Tags       string  `json:"tags"`
+	Status     string  `json:"status"`
+	HasOpenRun bool    `json:"has_open_run"`
+	LastPing   *string `json:"last_ping,omitempty"`
+	NextPing   *string `json:"next_ping,omitempty"`
+	Grace      int64   `json:"grace"`
+	Schedule   string  `json:"schedule,omitempty"`
+	Timezone   string  `json:"timezone,omitempty"`
+	Timeout    int64   `json:"timeout,omitempty"`
+	NPings     int     `json:"n_pings"`
+	PingURL    *string `json:"ping_url,omitempty"`
+	Channels   *string `json:"channels,omitempty"`
+	UniqueKey  string  `json:"unique_key,omitempty"`
 }
 
 // e2eHarness wires the full daemon stack against in-process httptest
@@ -199,6 +199,7 @@ func setupE2E(t *testing.T) *e2eHarness {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
+	t.Cleanup(func() { _ = eng.Close() })
 
 	mux := http.NewServeMux()
 	registerRoutes(mux, reg, eng, st, bus)
@@ -245,7 +246,7 @@ func TestE2EHappyPathPingTickDownRecover(t *testing.T) {
 		t.Errorf("healthz: code=%d body=%q", resp.code, resp.body)
 	}
 
-	// First ping: response shape (Ping-Body-Limit header, body=OK), engine
+	// First ping: response shape (X-Cadence-Body-Limit header, body=OK), engine
 	// state transitions to up.
 	resp = mustDo(t, http.MethodGet, h.serverURL+"/ping/api", http.Header{"X-Ping-Key": []string{"ops-secret"}}, "")
 	if resp.code != http.StatusOK {
@@ -254,8 +255,8 @@ func TestE2EHappyPathPingTickDownRecover(t *testing.T) {
 	if resp.body != "OK" {
 		t.Errorf("ping body: got %q, want OK", resp.body)
 	}
-	if got := resp.headers.Get("Ping-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
-		t.Errorf("Ping-Body-Limit: got %q, want %d", got, store.DefaultMaxBodyBytes)
+	if got := resp.headers.Get("X-Cadence-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
+		t.Errorf("X-Cadence-Body-Limit: got %q, want %d", got, store.DefaultMaxBodyBytes)
 	}
 	if snap, _ := h.engine.Snapshot(apiCheck.UUID); snap.Status != store.StatusUp {
 		t.Fatalf("engine after ping: status %q, want up", snap.Status)
@@ -276,8 +277,8 @@ func TestE2EHappyPathPingTickDownRecover(t *testing.T) {
 	if view.Status != "up" {
 		t.Errorf("view.status after first ping: %q", view.Status)
 	}
-	if view.Started {
-		t.Error("view.started should be false after success ping")
+	if view.HasOpenRun {
+		t.Error("view.has_open_run should be false after success ping")
 	}
 	if view.Grace != int64((5 * time.Minute).Seconds()) {
 		t.Errorf("view.grace: %d", view.Grace)

@@ -9,7 +9,7 @@ function row(over: Partial<Check> = {}): Check {
     name: 'Web cron',
     tags: 'prod web',
     status: 'up',
-    started: false,
+    has_open_run: false,
     last_ping: null,
     next_ping: null,
     grace: 60,
@@ -50,13 +50,13 @@ describe('CheckRow', () => {
     expect(screen.getAllByText('only-slug').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('renders a RUNNING badge when started', () => {
-    renderRow(row({ started: true }))
+  it('renders a RUNNING badge when an open run is active', () => {
+    renderRow(row({ has_open_run: true }))
     expect(screen.getByText('RUNNING')).toBeInTheDocument()
   })
 
-  it('omits the RUNNING badge when not started', () => {
-    renderRow(row({ started: false }))
+  it('omits the RUNNING badge when no open run', () => {
+    renderRow(row({ has_open_run: false }))
     expect(screen.queryByText('RUNNING')).not.toBeInTheDocument()
   })
 

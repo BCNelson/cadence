@@ -5,6 +5,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"errors"
 	"io"
 	"net/http"
@@ -17,6 +18,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// Default rate-limit budgets, applied when server.rate_limit fields are
+// left unset. 600 accepted pings/min/check is well above any sane
+// production checkin frequency (10/sec); 60 auth-fails/min/IP tolerates
+// a busy NAT but cuts off slug/key floods.
+const (
+	defaultPingsPerCheckPerMinute  = 600
+	defaultAuthFailsPerIPPerMinute = 60
+)
+
 // PingHandler serves the /ping/ family of endpoints. It's wire-compatible
 // with Healthchecks.io's ping API and additionally enforces cadence's
 // ping_keys allow-list on slug-form requests.
@@ -24,11 +34,36 @@ type PingHandler struct {
 	registry *config.Registry
 	engine   *engine.Engine
 	store    *store.Store
+
+	acceptedLimit *rateLimiter // accepted pings, keyed by check UUID
+	authFailLimit *rateLimiter // failed-auth attempts, keyed by client IP
 }
 
 // NewPingHandler builds a handler that the daemon mounts under /ping/.
 func NewPingHandler(reg *config.Registry, eng *engine.Engine, st *store.Store) *PingHandler {
-	return &PingHandler{registry: reg, engine: eng, store: st}
+	accepted := rateBudget(reg.Server.RateLimit.PerCheckPerMinute, defaultPingsPerCheckPerMinute)
+	authFail := rateBudget(reg.Server.RateLimit.AuthFailPerIPPerMinute, defaultAuthFailsPerIPPerMinute)
+	return &PingHandler{
+		registry:      reg,
+		engine:        eng,
+		store:         st,
+		acceptedLimit: newRateLimiter(accepted, accepted/60.0, nil),
+		authFailLimit: newRateLimiter(authFail, authFail/60.0, nil),
+	}
+}
+
+// rateBudget picks the bucket capacity. Negative is treated as the
+// default (defensive); zero is "disabled" (the limiter no-ops); positive
+// is the per-minute budget, also used as the burst.
+func rateBudget(configured, def int) float64 {
+	switch {
+	case configured < 0:
+		return float64(def)
+	case configured == 0:
+		return 0
+	default:
+		return float64(configured)
+	}
 }
 
 // Routes returns the (pattern, handler) pairs the daemon should register.
@@ -77,9 +112,22 @@ func (h *PingHandler) handle(act action) http.HandlerFunc {
 		id := r.PathValue("id")
 		check, err := h.authorize(id, r)
 		if err != nil {
-			// Per the spec: wrong key / unknown check both return 404 to
-			// keep the namespace non-enumerable. No body, no key hints.
+			// Cap failed-auth attempts per source IP so a flood probing
+			// slugs/keys can't drive the resolver in a hot loop. We still
+			// return 404 either way — the namespace stays non-enumerable
+			// per the spec — but exhausted IPs short-circuit early.
+			if !h.authFailLimit.Allow(clientIP(r)) {
+				http.NotFound(w, r)
+				return
+			}
 			http.NotFound(w, r)
+			return
+		}
+
+		// Per-check budget on accepted pings: a misconfigured cron client
+		// can't fill storage or pin the engine in state-transition work.
+		if !h.acceptedLimit.Allow(check.UUID.String()) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 
@@ -89,10 +137,12 @@ func (h *PingHandler) handle(act action) http.HandlerFunc {
 			return
 		}
 
-		// Advertise the body cap so clients know how many bytes will be
-		// captured per request. Set before WriteHeader so it lands on
-		// the response.
-		w.Header().Set("Ping-Body-Limit", strconv.Itoa(h.store.MaxBodyBytes()))
+		// Advertise the daemon-wide body cap so clients know how many
+		// bytes will be captured per request. Despite being on every
+		// response, this is a server-capability header, not a per-request
+		// stat — the cap applies to every ping equally. Cadence-prefixed
+		// to make ownership obvious to operators reading raw responses.
+		w.Header().Set("X-Cadence-Body-Limit", strconv.Itoa(h.store.MaxBodyBytes()))
 
 		if err := h.engine.HandlePing(check.UUID, req); err != nil {
 			if errors.Is(err, engine.ErrUnknownCheck) {
@@ -157,8 +207,17 @@ func (h *PingHandler) authorize(id string, r *http.Request) (*config.ResolvedChe
 	if provided == "" {
 		return nil, errUnauthorized
 	}
+	// Constant-time compare keeps timing leaks from distinguishing the
+	// "wrong key" case across allow-list entries. We don't equalize the
+	// slug-vs-UUID paths (different work shapes); this just narrows the
+	// per-key signal.
+	provBytes := []byte(provided)
 	for _, name := range check.PingKeys {
-		if secret, ok := h.registry.PingKeys[name]; ok && secret == provided {
+		secret, ok := h.registry.PingKeys[name]
+		if !ok {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(secret), provBytes) == 1 {
 			return check, nil
 		}
 	}

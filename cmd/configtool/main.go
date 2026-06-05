@@ -23,11 +23,12 @@ func (f *repeatableFlag) Set(v string) error { *f = append(*f, v); return nil }
 func main() {
 	var paths repeatableFlag
 	flag.Var(&paths, "c", "configuration file or directory (repeat for layering, left -> right)")
-	flag.Var(&paths, "config", "alias for -c")
 	flag.Parse()
 
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "configtool: at least one -c <path> is required")
+		fmt.Fprintln(os.Stderr, "configtool: validates and previews a cadence configuration")
+		fmt.Fprintln(os.Stderr, "usage: configtool -c <config-path> [-c overlay.yaml ...]")
+		flag.Usage()
 		os.Exit(2)
 	}
 
@@ -128,7 +129,36 @@ func sortedChecks(in map[string]*config.ResolvedCheck) []map[string]any {
 		if c.PinnedUUID {
 			row["uuid_pinned"] = true
 		}
+		// Per the design rule: a check with no ping_keys after resolution
+		// (neither declared nor inherited) is "open" — UUID-only access.
+		// Surface it explicitly so an accidental `ping_keys: []` shows up
+		// at a glance instead of hiding behind an empty list.
+		if len(c.PingKeys) == 0 {
+			row["access"] = "open (UUID-only)"
+		}
+		if names := inheritedNames(c.Inherited); len(names) > 0 {
+			row["inherited_from_defaults"] = names
+		}
 		out = append(out, row)
+	}
+	return out
+}
+
+// inheritedNames returns the sorted list of inheritable field names that
+// took their value from the global defaults block.
+func inheritedNames(in config.Inherited) []string {
+	var out []string
+	if in.Grace {
+		out = append(out, "grace")
+	}
+	if in.Timeout {
+		out = append(out, "timeout")
+	}
+	if in.PingKeys {
+		out = append(out, "ping_keys")
+	}
+	if in.Channels {
+		out = append(out, "channels")
 	}
 	return out
 }

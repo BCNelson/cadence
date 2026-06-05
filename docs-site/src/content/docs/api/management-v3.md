@@ -49,6 +49,74 @@ Get one check. `{id}` is the UUID or the `unique_key` (SHA-1-truncated UUID retu
 
 Returns the same `checkView` shape as above (not wrapped in `checks`).
 
+### `GET /api/v3/checks/{id}/flips/`
+
+Recent state transitions for a check, newest first. Cadence collapses its richer state machine onto HC.io's binary up/down view: any transition into `up` is reported as `up: 1`, anything else is `up: 0`. Internal transitions that don't move on the up/down axis (e.g. `up → late` while `late` still reads as down) are filtered out.
+
+```json
+[
+  { "timestamp": "2026-06-03T03:00:01Z", "up": 1 },
+  { "timestamp": "2026-06-02T03:11:14Z", "up": 0 }
+]
+```
+
+The response is a bare JSON array (no wrapping object) to match HC.io.
+
+### `GET /api/v3/checks/{id}/pings/`
+
+Recent inbound ping history for a check, newest first.
+
+```json
+{
+  "pings": [
+    {
+      "type": "exitstatus",
+      "date": "2026-06-03T03:00:01Z",
+      "exitstatus": 0,
+      "body_size": 142,
+      "remote_addr": "10.0.0.7",
+      "ua": "curl/8.1.0"
+    }
+  ]
+}
+```
+
+`type` values: `success`, `start`, `fail`, `log`, `exitstatus`. `exitstatus` is only present when `type == "exitstatus"`. Body content is not returned inline — it is captured server-side and exposed via the dashboard.
+
+### `GET /api/v3/channels/`
+
+Notification channels declared in config. **Requires a read-write key** — channels carry webhook URLs and similar transport secrets, so read-only viewers don't see the list.
+
+```json
+{
+  "channels": [
+    { "id": "hook", "name": "hook", "kind": "webhook" }
+  ]
+}
+```
+
+Transport details (URL, method, headers) are omitted because they often embed secrets. HC.io's own `/channels/` response also omits transport details.
+
+### `GET /api/v3/badges/`
+
+Per-check badge URL bundle. **Public** (no auth) — badges are designed for README embedding.
+
+```json
+{
+  "badges": {
+    "nightly-backup": {
+      "svg":     "https://cadence.example.com/badge/abc123.svg",
+      "svg3":    "https://cadence.example.com/badge/abc123-3.svg",
+      "json":    "https://cadence.example.com/badge/abc123.json",
+      "json3":   "https://cadence.example.com/badge/abc123-3.json",
+      "shields": "https://cadence.example.com/badge/abc123.shields"
+    }
+  }
+}
+```
+
+The badge URLs themselves dereference to the badge render handler. **The render handler (`/badge/{key}.svg`) is not implemented yet** — this endpoint emits the URLs so HC.io clients reading the index work today; rendering follows in a later release.
+
 ## checkView fields
 
 | Field | Notes |
@@ -57,14 +125,16 @@ Returns the same `checkView` shape as above (not wrapped in `checks`).
 | `name` | Omitted if not set in config. |
 | `tags` | **Space-separated string** (HC.io convention), not an array. |
 | `status` | `new`, `up`, `grace`, `down`, `paused`. The internal `late` status is reported as `grace` for wire compatibility. |
-| `started` | True between `/start` and the next closing ping. |
+| `has_open_run` | True between `/start` and the next closing ping. (HC.io reports this as `status: "started"`; cadence keeps it on a separate boolean for clarity.) |
 | `last_ping` | RFC3339 UTC. Omitted if the check has never pinged. |
 | `next_ping` | RFC3339 UTC. Computed from cron or `last_ping + period`. Omitted if no last ping. |
+| `last_duration` | Seconds between the most recent `/start` and its closing ping. Omitted if no closed run is in the retained ping window. |
 | `grace` | Grace seconds (integer). |
 | `schedule` | Cron expression, only set for cron-scheduled checks. |
 | `timezone` | Always `"UTC"` when `schedule` is set — cron is evaluated in UTC. |
 | `timeout` | Period seconds, only set for period-scheduled checks. |
 | `n_pings` | Total stored ping count (capped by retention). |
+| `badge_url` | Canonical SVG badge URL. Omitted when `server.base_url` is unset. |
 
 ### Read-write keys see additionally
 

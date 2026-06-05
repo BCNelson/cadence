@@ -47,6 +47,10 @@ func (h *MgmtHandler) Routes() []Route {
 	return []Route{
 		{Pattern: "GET /api/v3/checks/", Handler: h.listChecks},
 		{Pattern: "GET /api/v3/checks/{id}", Handler: h.getCheck},
+		{Pattern: "GET /api/v3/checks/{id}/flips/", Handler: h.flipsForCheck},
+		{Pattern: "GET /api/v3/checks/{id}/pings/", Handler: h.pingsForCheck},
+		{Pattern: "GET /api/v3/channels/", Handler: h.listChannels},
+		{Pattern: "GET /api/v3/badges/", Handler: h.listBadges},
 
 		// Writes — all return 409.
 		{Pattern: "POST /api/v3/checks/", Handler: h.writeRejected("create")},
@@ -135,18 +139,20 @@ func (h *MgmtHandler) writeRejected(op string) http.HandlerFunc {
 // "a /start ping opened a run that hasn't closed yet," rather than the
 // ambiguous `started`.
 type checkView struct {
-	Name       string  `json:"name,omitempty"`
-	Slug       string  `json:"slug"`
-	Tags       string  `json:"tags"` // space-separated, HC.io convention
-	Status     string  `json:"status"`
-	HasOpenRun bool    `json:"has_open_run"`
-	LastPing   *string `json:"last_ping,omitempty"`
-	NextPing   *string `json:"next_ping,omitempty"`
-	Grace      int64   `json:"grace"`
-	Schedule   string  `json:"schedule,omitempty"`
-	Timezone   string  `json:"timezone,omitempty"`
-	Timeout    int64   `json:"timeout,omitempty"`
-	NPings     int     `json:"n_pings"`
+	Name         string  `json:"name,omitempty"`
+	Slug         string  `json:"slug"`
+	Tags         string  `json:"tags"` // space-separated, HC.io convention
+	Status       string  `json:"status"`
+	HasOpenRun   bool    `json:"has_open_run"`
+	LastPing     *string `json:"last_ping,omitempty"`
+	NextPing     *string `json:"next_ping,omitempty"`
+	LastDuration *int64  `json:"last_duration,omitempty"` // seconds of last completed run
+	Grace        int64   `json:"grace"`
+	Schedule     string  `json:"schedule,omitempty"`
+	Timezone     string  `json:"timezone,omitempty"`
+	Timeout      int64   `json:"timeout,omitempty"`
+	NPings       int     `json:"n_pings"`
+	BadgeURL     string  `json:"badge_url,omitempty"`
 
 	// Read-write-only fields. Pointer types so omitempty drops them
 	// cleanly on read-only responses.
@@ -184,6 +190,13 @@ func (h *MgmtHandler) buildView(c *config.ResolvedCheck, kind KeyKind) checkView
 	}
 	if pings, err := h.store.RecentPings(c.UUID, 0); err == nil {
 		v.NPings = len(pings)
+		if d, ok := lastRunDuration(pings); ok {
+			secs := int64(d.Seconds())
+			v.LastDuration = &secs
+		}
+	}
+	if bu := h.badgeURL(c); bu != "" {
+		v.BadgeURL = bu
 	}
 
 	switch kind {
@@ -263,4 +276,243 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeAPIError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// flipView is one state-transition record on the wire. HC.io's flips API
+// only models the binary up/down dimension, so cadence collapses its richer
+// state machine to that view: any transition into `up` is up=1, anything
+// else is up=0. Transitions between `late` and `down`/`up` are still
+// emitted as up=0 since neither side is `up`.
+type flipView struct {
+	Timestamp string `json:"timestamp"`
+	Up        int    `json:"up"`
+}
+
+// flipsForCheck handles GET /api/v3/checks/{id}/flips/.
+func (h *MgmtHandler) flipsForCheck(w http.ResponseWriter, r *http.Request) {
+	if Authenticate(h.registry, r) == KeyNone {
+		writeAuthChallenge(w)
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
+		return
+	}
+	check, err := h.resolveCheck(r.PathValue("id"))
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "check not found")
+		return
+	}
+	events, err := h.store.RecentEvents(check.UUID, 0)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "read events")
+		return
+	}
+	// HC.io returns a bare array (not wrapped); preserve that shape.
+	out := make([]flipView, 0, len(events))
+	for _, e := range events {
+		fv, ok := flipFromEvent(e)
+		if !ok {
+			continue
+		}
+		out = append(out, fv)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// flipFromEvent collapses cadence's richer state machine onto HC.io's
+// binary up/down flip model. Returns ok=false for transitions that are
+// purely internal noise on the wire (e.g. new -> up on first ping, or any
+// transition where both endpoints are the same on the up/down axis).
+func flipFromEvent(e store.Event) (flipView, bool) {
+	fromUp := isUpForFlip(e.From)
+	toUp := isUpForFlip(e.To)
+	if fromUp == toUp {
+		// No movement on the up/down axis (e.g. up -> late, late -> down
+		// where the binary view is identical on both sides for some pairs).
+		// Up<->down boundary crossings are the only ones HC.io clients care
+		// about; skip the rest to avoid surfacing internal-only steps.
+		return flipView{}, false
+	}
+	up := 0
+	if toUp {
+		up = 1
+	}
+	return flipView{Timestamp: e.At.UTC().Format(time.RFC3339), Up: up}, true
+}
+
+// isUpForFlip maps cadence's state vocabulary onto HC.io's binary view.
+// `up` is up; `late` (a.k.a. `grace`) counts as down because the check is
+// outside its expected schedule; everything else is down.
+func isUpForFlip(s store.Status) bool {
+	return s == store.StatusUp
+}
+
+// pingView is one row of the ping history endpoint, named to match HC.io.
+type pingView struct {
+	Type       string `json:"type"`
+	Date       string `json:"date"`
+	ExitStatus *int   `json:"exitstatus,omitempty"`
+	BodySize   int    `json:"body_size,omitempty"`
+	RemoteAddr string `json:"remote_addr,omitempty"`
+	UA         string `json:"ua,omitempty"`
+}
+
+// pingsForCheck handles GET /api/v3/checks/{id}/pings/.
+func (h *MgmtHandler) pingsForCheck(w http.ResponseWriter, r *http.Request) {
+	if Authenticate(h.registry, r) == KeyNone {
+		writeAuthChallenge(w)
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
+		return
+	}
+	check, err := h.resolveCheck(r.PathValue("id"))
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "check not found")
+		return
+	}
+	pings, err := h.store.RecentPings(check.UUID, 0)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "read pings")
+		return
+	}
+	out := make([]pingView, 0, len(pings))
+	for i := range pings {
+		out = append(out, pingViewFromStore(&pings[i]))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pings": out})
+}
+
+// pingViewFromStore maps cadence's internal Ping to the HC.io-shaped wire
+// row. `PingExit` serializes as "exitstatus" so clients see the same kind
+// string HC.io emits for numeric-exit-code pings.
+func pingViewFromStore(p *store.Ping) pingView {
+	v := pingView{
+		Type:       string(p.Kind),
+		Date:       p.At.UTC().Format(time.RFC3339),
+		BodySize:   p.BodyBytes,
+		RemoteAddr: p.RemoteAddr,
+		UA:         p.UserAgent,
+	}
+	if p.Kind == store.PingExit {
+		v.Type = "exitstatus"
+		code := p.ExitCode
+		v.ExitStatus = &code
+	}
+	return v
+}
+
+// channelView is the JSON shape returned by /api/v3/channels/. Transport
+// details (url, method, headers) are deliberately omitted because they
+// frequently embed secrets — HC.io's own /channels/ response also omits them.
+type channelView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+// listChannels handles GET /api/v3/channels/. Requires a read-write key:
+// channel definitions carry webhook URLs and similar; read-only viewers
+// don't need to enumerate them.
+func (h *MgmtHandler) listChannels(w http.ResponseWriter, r *http.Request) {
+	if Authenticate(h.registry, r) != KeyReadWrite {
+		writeAuthChallenge(w)
+		writeAPIError(w, http.StatusUnauthorized, "channels require a read-write X-Api-Key")
+		return
+	}
+	out := make([]channelView, 0, len(h.registry.Channels))
+	for name, c := range h.registry.Channels {
+		out = append(out, channelView{ID: name, Name: name, Kind: c.Type})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	writeJSON(w, http.StatusOK, map[string]any{"channels": out})
+}
+
+// badgeURLs is the per-check bundle of badge endpoint URLs.
+type badgeURLs struct {
+	SVG     string `json:"svg"`
+	SVG3    string `json:"svg3"`
+	JSON    string `json:"json"`
+	JSON3   string `json:"json3"`
+	Shields string `json:"shields"`
+}
+
+// listBadges handles GET /api/v3/badges/. Public (no auth) to match HC.io's
+// README-embed use case: badges are designed for public dashboards. The
+// badge URLs themselves dereference to the badge-render handler, which is
+// deferred to a follow-up — this endpoint emits the URLs so HC.io clients
+// reading the index work today.
+func (h *MgmtHandler) listBadges(w http.ResponseWriter, r *http.Request) {
+	out := make(map[string]badgeURLs, len(h.registry.Checks))
+	for _, c := range h.registry.Checks {
+		out[c.Slug] = h.badgeURLsFor(c)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"badges": out})
+}
+
+// badgeURLsFor builds the five HC.io badge URLs for a check. Returns
+// empty URLs when server.base_url is unset (no way to construct an
+// absolute link); the keys are still present so the response shape is
+// stable for clients.
+func (h *MgmtHandler) badgeURLsFor(c *config.ResolvedCheck) badgeURLs {
+	uk := uniqueKey(c.UUID)
+	return badgeURLs{
+		SVG:     h.badgeLink(uk, ".svg"),
+		SVG3:    h.badgeLink(uk+"-3", ".svg"),
+		JSON:    h.badgeLink(uk, ".json"),
+		JSON3:   h.badgeLink(uk+"-3", ".json"),
+		Shields: h.badgeLink(uk, ".shields"),
+	}
+}
+
+func (h *MgmtHandler) badgeLink(stem, ext string) string {
+	base := h.registry.Server.BaseURL
+	path := "/badge/" + stem + ext
+	if base == "" {
+		return path
+	}
+	if parsed, err := url.Parse(base); err == nil {
+		parsed.Path = strings.TrimRight(parsed.Path, "/") + path
+		return parsed.String()
+	}
+	return strings.TrimRight(base, "/") + path
+}
+
+// badgeURL is the canonical SVG badge URL for a check, used to populate
+// the per-check `badge_url` field on checkView. Returns empty when
+// server.base_url is unset — the field is then omitted entirely.
+func (h *MgmtHandler) badgeURL(c *config.ResolvedCheck) string {
+	if h.registry.Server.BaseURL == "" {
+		return ""
+	}
+	return h.badgeLink(uniqueKey(c.UUID), ".svg")
+}
+
+// lastRunDuration finds the duration of the most recent completed run in
+// the ping history. A "run" is a /start ping followed by a closing ping
+// (success, fail, or numeric exit) with no other closing ping in between.
+// Returns (0, false) when there is no closed run in the retained history.
+//
+// pings is newest-first (as returned by store.RecentPings).
+func lastRunDuration(pings []store.Ping) (time.Duration, bool) {
+	for i, end := range pings {
+		if !isClosingPing(end.Kind) {
+			continue
+		}
+		for j := i + 1; j < len(pings); j++ {
+			if pings[j].Kind == store.PingStart {
+				return end.At.Sub(pings[j].At), true
+			}
+			if isClosingPing(pings[j].Kind) {
+				// Older closing ping with no start in between means the
+				// start that opened *this* run rolled off the ring or
+				// never existed. Stop scanning.
+				break
+			}
+		}
+		// Only consider the most recent closing ping; older ones might
+		// pair with rolled-off starts and we'd over-report duration.
+		return 0, false
+	}
+	return 0, false
+}
+
+func isClosingPing(k store.PingKind) bool {
+	return k == store.PingSuccess || k == store.PingFail || k == store.PingExit
 }

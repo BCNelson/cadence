@@ -246,7 +246,7 @@ func TestE2EHappyPathPingTickDownRecover(t *testing.T) {
 		t.Errorf("healthz: code=%d body=%q", resp.code, resp.body)
 	}
 
-	// First ping: response shape (X-Cadence-Body-Limit header, body=OK), engine
+	// First ping: response shape (Ping-Body-Limit header, body=OK), engine
 	// state transitions to up.
 	resp = mustDo(t, http.MethodGet, h.serverURL+"/ping/api", http.Header{"X-Ping-Key": []string{"ops-secret"}}, "")
 	if resp.code != http.StatusOK {
@@ -255,8 +255,8 @@ func TestE2EHappyPathPingTickDownRecover(t *testing.T) {
 	if resp.body != "OK" {
 		t.Errorf("ping body: got %q, want OK", resp.body)
 	}
-	if got := resp.headers.Get("X-Cadence-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
-		t.Errorf("X-Cadence-Body-Limit: got %q, want %d", got, store.DefaultMaxBodyBytes)
+	if got := resp.headers.Get("Ping-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
+		t.Errorf("Ping-Body-Limit: got %q, want %d", got, store.DefaultMaxBodyBytes)
 	}
 	if snap, _ := h.engine.Snapshot(apiCheck.UUID); snap.Status != store.StatusUp {
 		t.Fatalf("engine after ping: status %q, want up", snap.Status)

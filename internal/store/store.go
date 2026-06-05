@@ -249,7 +249,7 @@ func (s *Store) FetchLog(u uuid.UUID, at time.Time) (LogEntry, error) {
 }
 
 // MaxBodyBytes exposes the configured body cap so the Ping API can
-// advertise it in the X-Cadence-Body-Limit response header.
+// advertise it in the Ping-Body-Limit response header.
 func (s *Store) MaxBodyBytes() int { return s.opts.MaxBodyBytes }
 
 // scanKeys returns every key under (prefix, u) in ascending order. Used

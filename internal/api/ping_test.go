@@ -86,8 +86,8 @@ checks:
 	if rr.Code != http.StatusOK {
 		t.Fatalf("correct key: got %d body=%q", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("X-Cadence-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
-		t.Errorf("X-Cadence-Body-Limit: got %q", got)
+	if got := rr.Header().Get("Ping-Body-Limit"); got != strconv.Itoa(store.DefaultMaxBodyBytes) {
+		t.Errorf("Ping-Body-Limit: got %q", got)
 	}
 	// Engine should now be up.
 	c := h.reg.CheckBySlug("api")
@@ -214,9 +214,9 @@ checks:
 	if rr.Code != http.StatusOK {
 		t.Fatalf("/log: got %d", rr.Code)
 	}
-	limit, _ := strconv.Atoi(rr.Header().Get("X-Cadence-Body-Limit"))
+	limit, _ := strconv.Atoi(rr.Header().Get("Ping-Body-Limit"))
 	if limit != store.DefaultMaxBodyBytes {
-		t.Errorf("X-Cadence-Body-Limit: got %d", limit)
+		t.Errorf("Ping-Body-Limit: got %d", limit)
 	}
 	c := h.reg.CheckBySlug("api")
 	pings, _ := h.store.RecentPings(c.UUID, 0)

@@ -137,12 +137,10 @@ func (h *PingHandler) handle(act action) http.HandlerFunc {
 			return
 		}
 
-		// Advertise the daemon-wide body cap so clients know how many
-		// bytes will be captured per request. Despite being on every
-		// response, this is a server-capability header, not a per-request
-		// stat — the cap applies to every ping equally. Cadence-prefixed
-		// to make ownership obvious to operators reading raw responses.
-		w.Header().Set("X-Cadence-Body-Limit", strconv.Itoa(h.store.MaxBodyBytes()))
+		// Advertise the daemon-wide body cap. HC.io ships this on every
+		// ping response under the same name, so its clients can read it
+		// without code changes when pointed at cadence.
+		w.Header().Set("Ping-Body-Limit", strconv.Itoa(h.store.MaxBodyBytes()))
 
 		if err := h.engine.HandlePing(check.UUID, req); err != nil {
 			if errors.Is(err, engine.ErrUnknownCheck) {

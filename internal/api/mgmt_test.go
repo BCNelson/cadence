@@ -267,3 +267,175 @@ func TestMgmtNeverPingedNoTimestamps(t *testing.T) {
 		}
 	}
 }
+
+func TestMgmtFlipsReturnsHCIOShape(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+	// new -> up via a ping, then up -> down via /fail.
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingSuccess})
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingFail})
+
+	rr := h.do("GET", "/api/v3/checks/"+c.UUID.String()+"/flips/", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("flips: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var flips []flipView
+	if err := json.Unmarshal(rr.Body.Bytes(), &flips); err != nil {
+		t.Fatalf("decode flips: %v body=%q", err, rr.Body.String())
+	}
+	// Expect at least the up->down transition. The new->up flip is also
+	// recorded because `new` collapses to !up on the binary axis.
+	if len(flips) < 1 {
+		t.Fatalf("flips count: %d, want >=1, got: %+v", len(flips), flips)
+	}
+	// Newest first: first entry is the up->down flip (up=0).
+	if flips[0].Up != 0 {
+		t.Errorf("newest flip: up=%d, want 0 (down)", flips[0].Up)
+	}
+	if flips[0].Timestamp == "" {
+		t.Error("flip timestamp empty")
+	}
+}
+
+func TestMgmtFlipsAuthAnd404(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+
+	rr := h.do("GET", "/api/v3/checks/"+c.UUID.String()+"/flips/", nil)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("no key: got %d", rr.Code)
+	}
+	rr = h.do("GET", "/api/v3/checks/bogus/flips/", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("bogus id: got %d", rr.Code)
+	}
+}
+
+func TestMgmtPingsReturnsHistory(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingStart, UserAgent: "curl/8", RemoteAddr: "10.0.0.1"})
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingExit, ExitCode: 7})
+
+	rr := h.do("GET", "/api/v3/checks/"+c.UUID.String()+"/pings/", map[string]string{"X-Api-Key": "rw-key"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("pings: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var resp struct{ Pings []pingView }
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Pings) != 2 {
+		t.Fatalf("pings count: got %d, want 2: %+v", len(resp.Pings), resp.Pings)
+	}
+	// Newest first.
+	if resp.Pings[0].Type != "exitstatus" {
+		t.Errorf("newest type: got %q, want exitstatus", resp.Pings[0].Type)
+	}
+	if resp.Pings[0].ExitStatus == nil || *resp.Pings[0].ExitStatus != 7 {
+		t.Errorf("exitstatus: %v", resp.Pings[0].ExitStatus)
+	}
+	if resp.Pings[1].Type != "start" {
+		t.Errorf("oldest type: got %q, want start", resp.Pings[1].Type)
+	}
+	if resp.Pings[1].UA != "curl/8" {
+		t.Errorf("ua: %q", resp.Pings[1].UA)
+	}
+}
+
+func TestMgmtChannelsRequiresReadWrite(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+
+	// Read-only key is insufficient — channel definitions can carry secrets.
+	rr := h.do("GET", "/api/v3/channels/", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("ro key: got %d, want 401", rr.Code)
+	}
+
+	rr = h.do("GET", "/api/v3/channels/", map[string]string{"X-Api-Key": "rw-key"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("rw key: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var resp struct{ Channels []channelView }
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Channels) != 1 || resp.Channels[0].Name != "hook" || resp.Channels[0].Kind != "webhook" {
+		t.Errorf("channels: %+v", resp.Channels)
+	}
+}
+
+func TestMgmtBadgesPublicAndShapesPerSlug(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+
+	// Public — no API key needed.
+	rr := h.do("GET", "/api/v3/badges/", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("badges: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Badges map[string]badgeURLs `json:"badges"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Badges) != 2 {
+		t.Fatalf("badges count: got %d, want 2 (one per check)", len(resp.Badges))
+	}
+	apiBadges, ok := resp.Badges["api"]
+	if !ok {
+		t.Fatal("badges missing 'api' slug")
+	}
+	if !strings.HasPrefix(apiBadges.SVG, "https://cadence.example.com/badge/") || !strings.HasSuffix(apiBadges.SVG, ".svg") {
+		t.Errorf("svg URL: %q", apiBadges.SVG)
+	}
+	if !strings.Contains(apiBadges.SVG3, "-3.svg") {
+		t.Errorf("svg3 URL: %q", apiBadges.SVG3)
+	}
+	if !strings.HasSuffix(apiBadges.Shields, ".shields") {
+		t.Errorf("shields URL: %q", apiBadges.Shields)
+	}
+}
+
+func TestMgmtCheckViewIncludesBadgeURL(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+	rr := h.do("GET", "/api/v3/checks/"+c.UUID.String(), map[string]string{"X-Api-Key": "ro-key"})
+	var v checkView
+	_ = json.Unmarshal(rr.Body.Bytes(), &v)
+	if !strings.HasPrefix(v.BadgeURL, "https://cadence.example.com/badge/") {
+		t.Errorf("badge_url: %q", v.BadgeURL)
+	}
+}
+
+func TestMgmtCheckViewLastDuration(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+
+	// Open a run, then close it — engine.HandlePing uses the engine's
+	// fixed `now` so start.at == end.at; the duration is zero but the
+	// field should still be populated (run completed).
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingStart})
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingSuccess})
+
+	rr := h.do("GET", "/api/v3/checks/"+c.UUID.String(), map[string]string{"X-Api-Key": "ro-key"})
+	var v checkView
+	_ = json.Unmarshal(rr.Body.Bytes(), &v)
+	if v.LastDuration == nil {
+		t.Errorf("last_duration should be set after a closed run, got nil")
+	}
+}
+
+func TestMgmtCheckViewLastDurationNilWithoutRun(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+	// Plain success ping (no /start) — no completed run.
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingSuccess})
+
+	rr := h.do("GET", "/api/v3/checks/"+c.UUID.String(), map[string]string{"X-Api-Key": "ro-key"})
+	var v checkView
+	_ = json.Unmarshal(rr.Body.Bytes(), &v)
+	if v.LastDuration != nil {
+		t.Errorf("last_duration should be nil without a /start-closed run, got %d", *v.LastDuration)
+	}
+}

@@ -60,3 +60,15 @@ LevelDB keys are namespaced by UUID, so renaming a slug starts the check with fr
 Set `ping_keys: [name1, name2]` to require one of those keys on slug-form pings. Leave the list empty to make the check "open" — open checks only accept UUID-form pings (the slug form is rejected so the slug can't accidentally become a secret).
 
 See [ping keys](/cadence/configuration/ping-keys/) for the full auth model.
+
+## Tags & rollups
+
+Every string in `tags:` is a free-form label — there's no registry to declare them in. A check can carry as many as it wants. Once tags exist on a check, three things light up:
+
+- **Filter on the list endpoint.** `GET /api/v3/checks/?tag=prod&tag=db` returns only checks bearing **all** the listed tags (AND, matching Healthchecks.io).
+- **Per-tag rollup endpoints.** `GET /api/v3/tags/` lists every tag with its combined status; `GET /api/v3/tags/{name}` returns the full check views for one tag with that combined status alongside.
+- **Per-tag badges.** `/badge/tag/{name}.svg`, `.json`, `.shields` render a badge representing the rollup. The special name `*` rolls up every check. Append `-3` (e.g. `/badge/tag/{name}-3.svg`) for the 3-state palette that shows `late` distinctly instead of collapsing it into `down`.
+
+The rollup rule is **worst-wins, paused excluded**: `down > late > new > up`. A paused member doesn't drag a tag down; if every member is paused, the tag itself reports `paused`. So pausing a noisy check stops it from masking the tag's real signal.
+
+Tags are passed through verbatim — they're case-sensitive and not normalized. The space-separated form returned by `/api/v3/checks/` is the Healthchecks.io wire convention; the rollup endpoints return them as JSON arrays.

@@ -343,6 +343,94 @@ func TestMgmtPingsReturnsHistory(t *testing.T) {
 	}
 }
 
+func TestMgmtResolveBySlug(t *testing.T) {
+	// Slug lookups are a cadence extension to the HC.io URL surface so the
+	// SPA can route by user-facing names rather than UUID/unique_key.
+	h := newMgmtHarness(t, sampleConfig)
+	rr := h.do("GET", "/api/v3/checks/api", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("by slug: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var v checkView
+	_ = json.Unmarshal(rr.Body.Bytes(), &v)
+	if v.Slug != "api" {
+		t.Errorf("slug: got %q, want api", v.Slug)
+	}
+}
+
+func TestMgmtGetPingReturnsDetailWithBody(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+	body := []byte("captured-payload\nline two")
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{
+		Kind:       store.PingSuccess,
+		Body:       body,
+		UserAgent:  "curl/8",
+		RemoteAddr: "10.0.0.1",
+	})
+
+	// Pull the ID off the list response so the test mirrors how the SPA
+	// constructs the detail URL (rather than reaching into store internals).
+	rr := h.do("GET", "/api/v3/checks/api/pings/", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list pings: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var listResp struct{ Pings []pingView }
+	_ = json.Unmarshal(rr.Body.Bytes(), &listResp)
+	if len(listResp.Pings) != 1 {
+		t.Fatalf("want 1 ping, got %d", len(listResp.Pings))
+	}
+	pid := listResp.Pings[0].ID
+	if pid == "" {
+		t.Fatal("ping id missing from list response")
+	}
+	if !listResp.Pings[0].HasBody {
+		t.Error("has_body should be true on list row when body was captured")
+	}
+
+	rr = h.do("GET", "/api/v3/checks/api/pings/"+pid, map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get ping: got %d body=%q", rr.Code, rr.Body.String())
+	}
+	var detail pingDetailView
+	if err := json.Unmarshal(rr.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if detail.Body != string(body) {
+		t.Errorf("body: got %q, want %q", detail.Body, string(body))
+	}
+	if detail.RemoteAddr != "10.0.0.1" || detail.UA != "curl/8" {
+		t.Errorf("remote/ua passthrough: %+v", detail)
+	}
+}
+
+func TestMgmtGetPingAuthAnd404s(t *testing.T) {
+	h := newMgmtHarness(t, sampleConfig)
+	c := h.reg.CheckBySlug("api")
+	_ = h.engine.HandlePing(c.UUID, &engine.PingRequest{Kind: store.PingSuccess})
+
+	// Unauthenticated.
+	rr := h.do("GET", "/api/v3/checks/api/pings/1", nil)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("no key: got %d", rr.Code)
+	}
+	// Unknown check.
+	rr = h.do("GET", "/api/v3/checks/bogus/pings/1", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("bogus check: got %d", rr.Code)
+	}
+	// Non-numeric ping id.
+	rr = h.do("GET", "/api/v3/checks/api/pings/not-a-number", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("bad id: got %d", rr.Code)
+	}
+	// Numeric but no such ping.
+	rr = h.do("GET", "/api/v3/checks/api/pings/1", map[string]string{"X-Api-Key": "ro-key"})
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("absent ping: got %d", rr.Code)
+	}
+}
+
 func TestMgmtChannelsRequiresReadWrite(t *testing.T) {
 	h := newMgmtHarness(t, sampleConfig)
 

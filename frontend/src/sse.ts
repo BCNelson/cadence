@@ -16,8 +16,11 @@ export function useTransitionStream(): void {
     const onTransition = (): void => {
       // Don't try to merge the patch into the cache by hand — the read
       // API is authoritative (status, last_ping, next_ping all change),
-      // so refetching is simpler and the response is small.
+      // so refetching is simpler and the response is small. Tag rollups
+      // are derived from the same underlying state, so invalidate both
+      // query families on every transition.
       void qc.invalidateQueries({ queryKey: ['checks'] })
+      void qc.invalidateQueries({ queryKey: ['tags'] })
     }
     es.addEventListener('transition', onTransition)
     return () => {

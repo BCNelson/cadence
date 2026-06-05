@@ -1,4 +1,5 @@
 import type { Check } from '../api'
+import { Link } from '@tanstack/react-router'
 import { StatusBadge } from './StatusBadge'
 
 // formatRelative renders an ISO timestamp as "5m ago" / "in 12s" etc.
@@ -43,8 +44,14 @@ export function CheckRow({ check }: { check: Check }) {
         )}
       </td>
       <td className="py-3 px-2">
-        <div className="font-medium text-slate-900">{check.name ?? check.slug}</div>
-        <div className="text-xs text-slate-500">{check.slug}</div>
+        <Link
+          to="/checks/$slug"
+          params={{ slug: check.slug }}
+          className="block hover:underline"
+        >
+          <div className="font-medium text-slate-900">{check.name ?? check.slug}</div>
+          <div className="text-xs text-slate-500">{check.slug}</div>
+        </Link>
       </td>
       <td className="py-3 px-2 text-sm text-slate-600">
         {check.schedule ? (
@@ -66,9 +73,14 @@ export function CheckRow({ check }: { check: Check }) {
           .split(' ')
           .filter(Boolean)
           .map((tag) => (
-            <span key={tag} className="mr-1 inline-block rounded bg-slate-100 px-1.5 py-0.5">
+            <Link
+              key={tag}
+              to="/tags/$tag"
+              params={{ tag }}
+              className="mr-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 hover:bg-slate-200"
+            >
               {tag}
-            </span>
+            </Link>
           ))}
       </td>
       <td className="py-3 px-4 text-right text-xs tabular-nums text-slate-400">

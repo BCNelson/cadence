@@ -129,3 +129,124 @@ async function fetchJson<T>(path: string): Promise<T> {
 export function listChecks(): Promise<ListChecksResponse> {
   return fetchJson<ListChecksResponse>('/api/v3/checks/')
 }
+
+// listChecksByTag narrows the check list to entries bearing every listed
+// tag (AND semantics, matching HC.io and the server-side filter).
+export function listChecksByTag(tags: string[]): Promise<ListChecksResponse> {
+  if (tags.length === 0) return listChecks()
+  const qs = tags.map((t) => `tag=${encodeURIComponent(t)}`).join('&')
+  return fetchJson<ListChecksResponse>(`/api/v3/checks/?${qs}`)
+}
+
+// getCheck fetches a single check by slug, unique_key, or UUID. The SPA
+// uses the slug for routing (/checks/$slug) since it's user-facing.
+export function getCheck(id: string): Promise<Check> {
+  return fetchJson<Check>(`/api/v3/checks/${encodeURIComponent(id)}`)
+}
+
+// Ping mirrors /api/v3/checks/{id}/pings/ rows. `id` is the unix-nanosecond
+// timestamp used as the URL identifier in detail lookups. `type` is one of
+// the PingKind values plus "exitstatus" (the HC.io spelling for
+// numeric-exit pings).
+export interface Ping {
+  id: string
+  type: string
+  date: string
+  exitstatus?: number | null
+  body_size?: number
+  truncated?: boolean
+  has_body?: boolean
+  remote_addr?: string
+  ua?: string
+}
+
+export interface ListPingsResponse {
+  pings: Ping[]
+}
+
+export function getPingsForCheck(id: string): Promise<ListPingsResponse> {
+  return fetchJson<ListPingsResponse>(`/api/v3/checks/${encodeURIComponent(id)}/pings/`)
+}
+
+// PingDetail extends Ping with the captured body (when one was stored).
+// Returned by the per-ping detail endpoint.
+export interface PingDetail extends Ping {
+  body?: string
+}
+
+export function getPing(checkID: string, pingID: string): Promise<PingDetail> {
+  return fetchJson<PingDetail>(
+    `/api/v3/checks/${encodeURIComponent(checkID)}/pings/${encodeURIComponent(pingID)}`,
+  )
+}
+
+// TagSummary is one row of the /api/v3/tags/ index. `checks` is a slug
+// list — fetch /api/v3/tags/{name} (or /api/v3/checks/?tag=name) for
+// full check views.
+export interface TagSummary {
+  name: string
+  status: CheckStatus
+  n_checks: number
+  checks: string[]
+}
+
+export interface ListTagsResponse {
+  tags: TagSummary[]
+}
+
+export interface TagDetail {
+  name: string
+  status: CheckStatus
+  checks: Check[]
+}
+
+export function listTags(): Promise<ListTagsResponse> {
+  return fetchJson<ListTagsResponse>('/api/v3/tags/')
+}
+
+export function getTag(name: string): Promise<TagDetail> {
+  return fetchJson<TagDetail>(`/api/v3/tags/${encodeURIComponent(name)}`)
+}
+
+// Status rank — worst wins, paused excluded. Mirrors the server-side
+// rollup in internal/api/tags.go; kept in sync so derived UI matches the
+// canonical view from /api/v3/tags/.
+const statusRank: Record<CheckStatus, number> = {
+  down: 4,
+  grace: 3,
+  new: 2,
+  up: 1,
+  paused: 0,
+}
+
+// rollupStatus collapses a set of checks to one combined status using the
+// same worst-wins rule as the backend. Returns null for an empty input.
+export function rollupStatus(checks: Check[]): CheckStatus | null {
+  if (checks.length === 0) return null
+  let worst: CheckStatus | null = null
+  let worstRank = -1
+  let sawActive = false
+  for (const c of checks) {
+    if (c.status === 'paused') continue
+    sawActive = true
+    const r = statusRank[c.status]
+    if (r > worstRank) {
+      worstRank = r
+      worst = c.status
+    }
+  }
+  return sawActive ? worst : 'paused'
+}
+
+// uniqueTags pulls every distinct tag from a list of checks. Tag strings
+// arrive space-separated (HC.io convention); this normalizes into a
+// sorted array.
+export function uniqueTags(checks: Check[]): string[] {
+  const set = new Set<string>()
+  for (const c of checks) {
+    for (const t of c.tags.split(' ')) {
+      if (t) set.add(t)
+    }
+  }
+  return [...set].sort()
+}

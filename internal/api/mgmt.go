@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,11 +52,18 @@ func (h *MgmtHandler) Routes() []Route {
 		{Pattern: "GET /api/v3/checks/{id}", Handler: h.getCheck},
 		{Pattern: "GET /api/v3/checks/{id}/flips/", Handler: h.flipsForCheck},
 		{Pattern: "GET /api/v3/checks/{id}/pings/", Handler: h.pingsForCheck},
+		{Pattern: "GET /api/v3/checks/{id}/pings/{ping_id}", Handler: h.getPing},
 		{Pattern: "GET /api/v3/channels/", Handler: h.listChannels},
 		{Pattern: "GET /api/v3/badges/", Handler: h.listBadges},
+		{Pattern: "GET /api/v3/tags/", Handler: h.listTags},
+		{Pattern: "GET /api/v3/tags/{tag}", Handler: h.getTag},
 		// /api/v3/auth/config is public: the SPA reads it pre-login to
 		// decide whether to drive OIDC or fall back to the API-key gate.
 		{Pattern: "GET /api/v3/auth/config", Handler: h.authConfig},
+		// Badge render handler. Public (README-embed use case). The path
+		// segment after /badge/ encodes the target (check unique_key or
+		// "tag/<name>") and the .ext extension picks the format.
+		{Pattern: "GET /badge/", Handler: h.handleBadge},
 
 		// Writes — all return 409.
 		{Pattern: "POST /api/v3/checks/", Handler: h.writeRejected("create")},
@@ -74,8 +82,14 @@ func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Repeated ?tag= filters narrow the result with AND semantics — matches
+	// HC.io's behavior so existing clients work unchanged.
+	wanted := r.URL.Query()["tag"]
 	views := make([]checkView, 0, len(h.registry.Checks))
 	for _, c := range h.registry.Checks {
+		if !hasAllTags(c, wanted) {
+			continue
+		}
 		views = append(views, h.buildView(c, kind))
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Slug < views[j].Slug })
@@ -100,10 +114,11 @@ func (h *MgmtHandler) getCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.buildView(check, kind))
 }
 
-// resolveCheck accepts either a UUID or a unique_key (sha1-truncated form).
-// Slug lookups are intentionally not supported on this endpoint — HC.io
-// uses UUID and unique_key, and using the slug here would let clients
-// enumerate the namespace from public-facing URLs.
+// resolveCheck accepts a UUID, a unique_key (sha1-truncated form), or a
+// slug. UUID and unique_key are the HC.io-compatible identifiers; slug is
+// a cadence extension so the SPA can build user-friendly URLs like
+// /checks/<slug>. All three forms are gated by the same authentication, so
+// adding slug doesn't widen access — the request still needs a valid key.
 func (h *MgmtHandler) resolveCheck(id string) (*config.ResolvedCheck, error) {
 	if u, err := uuid.Parse(id); err == nil {
 		c := h.registry.CheckByUUID(u)
@@ -118,6 +133,9 @@ func (h *MgmtHandler) resolveCheck(id string) (*config.ResolvedCheck, error) {
 		if uniqueKey(c.UUID) == id {
 			return c, nil
 		}
+	}
+	if c := h.registry.CheckBySlug(id); c != nil {
+		return c, nil
 	}
 	return nil, errors.New("not found")
 }
@@ -351,13 +369,29 @@ func isUpForFlip(s store.Status) bool {
 }
 
 // pingView is one row of the ping history endpoint, named to match HC.io.
+// `id` is a cadence extension — the unix-nanosecond timestamp as a string,
+// used as the stable URL identifier for the per-ping detail endpoint. It
+// matches the storage key, so a successful lookup is a direct store hit
+// rather than a linear scan.
 type pingView struct {
+	ID         string `json:"id"`
 	Type       string `json:"type"`
 	Date       string `json:"date"`
 	ExitStatus *int   `json:"exitstatus,omitempty"`
 	BodySize   int    `json:"body_size,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	HasBody    bool   `json:"has_body,omitempty"`
 	RemoteAddr string `json:"remote_addr,omitempty"`
 	UA         string `json:"ua,omitempty"`
+}
+
+// pingDetailView extends pingView with the captured body for the
+// per-ping detail endpoint. Body is returned as a UTF-8 string; the
+// content-type isn't tracked at capture time so the SPA renders it as
+// preformatted text.
+type pingDetailView struct {
+	pingView
+	Body string `json:"body,omitempty"`
 }
 
 // pingsForCheck handles GET /api/v3/checks/{id}/pings/.
@@ -389,9 +423,12 @@ func (h *MgmtHandler) pingsForCheck(w http.ResponseWriter, r *http.Request) {
 // string HC.io emits for numeric-exit-code pings.
 func pingViewFromStore(p *store.Ping) pingView {
 	v := pingView{
+		ID:         strconv.FormatInt(p.At.UnixNano(), 10),
 		Type:       string(p.Kind),
 		Date:       p.At.UTC().Format(time.RFC3339),
 		BodySize:   p.BodyBytes,
+		Truncated:  p.Truncated,
+		HasBody:    p.HasBody,
 		RemoteAddr: p.RemoteAddr,
 		UA:         p.UserAgent,
 	}
@@ -401,6 +438,57 @@ func pingViewFromStore(p *store.Ping) pingView {
 		v.ExitStatus = &code
 	}
 	return v
+}
+
+// getPing handles GET /api/v3/checks/{id}/pings/{ping_id}. {ping_id} is
+// the unix-nanosecond timestamp returned in the list response. Returns
+// the full ping record plus its captured body (when one was stored).
+func (h *MgmtHandler) getPing(w http.ResponseWriter, r *http.Request) {
+	if Authenticate(h.registry, h.oidc, r) == KeyNone {
+		writeAuthChallenge(w, h.oidc)
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
+		return
+	}
+	check, err := h.resolveCheck(r.PathValue("id"))
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "check not found")
+		return
+	}
+	pingID := r.PathValue("ping_id")
+	nanos, err := strconv.ParseInt(pingID, 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "ping id must be a unix-nanosecond integer")
+		return
+	}
+	// Linear scan is fine — retained pings per check are capped (default
+	// 1000). Avoids exposing the LevelDB key layout through a direct
+	// fetch helper that doesn't exist on store today.
+	pings, err := h.store.RecentPings(check.UUID, 0)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "read pings")
+		return
+	}
+	var match *store.Ping
+	for i := range pings {
+		if pings[i].At.UnixNano() == nanos {
+			match = &pings[i]
+			break
+		}
+	}
+	if match == nil {
+		writeAPIError(w, http.StatusNotFound, "ping not found")
+		return
+	}
+	detail := pingDetailView{pingView: pingViewFromStore(match)}
+	if match.HasBody {
+		if log, err := h.store.FetchLog(check.UUID, match.At); err == nil {
+			detail.Body = string(log.Body)
+			// Trust the freshly-fetched log over the cached flag — the
+			// body's truncation state is authoritative there.
+			detail.Truncated = log.Truncated
+		}
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // channelView is the JSON shape returned by /api/v3/channels/. Transport
@@ -459,15 +547,110 @@ func (h *MgmtHandler) authConfig(w http.ResponseWriter, _ *http.Request) {
 
 // listBadges handles GET /api/v3/badges/. Public (no auth) to match HC.io's
 // README-embed use case: badges are designed for public dashboards. The
-// badge URLs themselves dereference to the badge-render handler, which is
-// deferred to a follow-up — this endpoint emits the URLs so HC.io clients
-// reading the index work today.
-func (h *MgmtHandler) listBadges(w http.ResponseWriter, r *http.Request) {
-	out := make(map[string]badgeURLs, len(h.registry.Checks))
+// response carries two maps: per-check (keyed by slug) and per-tag (keyed
+// by tag name, with "*" as the all-checks rollup). Both point at the
+// /badge/ render handler.
+func (h *MgmtHandler) listBadges(w http.ResponseWriter, _ *http.Request) {
+	bySlug := make(map[string]badgeURLs, len(h.registry.Checks))
 	for _, c := range h.registry.Checks {
-		out[c.Slug] = h.badgeURLsFor(c)
+		bySlug[c.Slug] = h.badgeURLsFor(c)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"badges": out})
+	byTag := make(map[string]badgeURLs)
+	for tag := range h.tagBuckets() {
+		byTag[tag] = h.tagBadgeURLs(tag)
+	}
+	byTag["*"] = h.tagBadgeURLs("*")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"badges": bySlug,
+		"tags":   byTag,
+	})
+}
+
+// tagBadgeURLs is the per-tag analogue of badgeURLsFor. Stem is
+// "tag/<name>"; HC.io uses a project-scoped path which cadence doesn't
+// have, so we namespace tags under /badge/tag/ to keep per-check stems
+// (unique-key hex) and per-tag stems unambiguous.
+func (h *MgmtHandler) tagBadgeURLs(tag string) badgeURLs {
+	stem := "tag/" + tag
+	return badgeURLs{
+		SVG:     h.badgeLink(stem, ".svg"),
+		SVG3:    h.badgeLink(stem+"-3", ".svg"),
+		JSON:    h.badgeLink(stem, ".json"),
+		JSON3:   h.badgeLink(stem+"-3", ".json"),
+		Shields: h.badgeLink(stem, ".shields"),
+	}
+}
+
+// tagSummary is one entry of the /api/v3/tags/ index. Members are listed
+// as bare slugs to keep the index payload small; clients wanting full
+// check views per tag use /api/v3/tags/{tag} or /api/v3/checks/?tag=NAME.
+type tagSummary struct {
+	Name    string   `json:"name"`
+	Status  string   `json:"status"`
+	NChecks int      `json:"n_checks"`
+	Checks  []string `json:"checks"`
+}
+
+// listTags handles GET /api/v3/tags/. Returns every tag present on any
+// check, with its rolled-up status and member slugs. Sorted by tag name.
+func (h *MgmtHandler) listTags(w http.ResponseWriter, r *http.Request) {
+	if Authenticate(h.registry, h.oidc, r) == KeyNone {
+		writeAuthChallenge(w, h.oidc)
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
+		return
+	}
+	buckets := h.tagBuckets()
+	out := make([]tagSummary, 0, len(buckets))
+	for name, checks := range buckets {
+		slugs := make([]string, 0, len(checks))
+		for _, c := range checks {
+			slugs = append(slugs, c.Slug)
+		}
+		sort.Strings(slugs)
+		out = append(out, tagSummary{
+			Name:    name,
+			Status:  apiStatus(h.rollupStatus(checks)),
+			NChecks: len(checks),
+			Checks:  slugs,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	writeJSON(w, http.StatusOK, map[string]any{"tags": out})
+}
+
+// tagDetail is the /api/v3/tags/{tag} response shape. Embeds full check
+// views (same shape as /api/v3/checks/) so a single fetch is enough to
+// render a tag-scoped dashboard.
+type tagDetail struct {
+	Name   string      `json:"name"`
+	Status string      `json:"status"`
+	Checks []checkView `json:"checks"`
+}
+
+// getTag handles GET /api/v3/tags/{tag}. 404 when the tag has no members.
+func (h *MgmtHandler) getTag(w http.ResponseWriter, r *http.Request) {
+	kind := Authenticate(h.registry, h.oidc, r)
+	if kind == KeyNone {
+		writeAuthChallenge(w, h.oidc)
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
+		return
+	}
+	name := r.PathValue("tag")
+	members := h.tagBuckets()[name]
+	if len(members) == 0 {
+		writeAPIError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+	views := make([]checkView, 0, len(members))
+	for _, c := range members {
+		views = append(views, h.buildView(c, kind))
+	}
+	sort.Slice(views, func(i, j int) bool { return views[i].Slug < views[j].Slug })
+	writeJSON(w, http.StatusOK, tagDetail{
+		Name:   name,
+		Status: apiStatus(h.rollupStatus(members)),
+		Checks: views,
+	})
 }
 
 // badgeURLsFor builds the five HC.io badge URLs for a check. Returns

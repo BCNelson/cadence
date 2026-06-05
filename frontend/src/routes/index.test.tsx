@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Dashboard } from './index'
+import { withRouterReady } from '../test-utils'
 import * as api from '../api'
 import type { Check, ListChecksResponse } from '../api'
 
@@ -29,11 +30,15 @@ function mkCheck(over: Partial<Check>): Check {
   }
 }
 
-function wrap(children: ReactNode) {
+async function wrap(children: ReactNode) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+  return (
+    <QueryClientProvider client={qc}>
+      {await withRouterReady(children)}
+    </QueryClientProvider>
+  )
 }
 
 describe('Dashboard', () => {
@@ -56,7 +61,7 @@ describe('Dashboard', () => {
       checks,
     } satisfies ListChecksResponse)
 
-    render(wrap(<Dashboard />))
+    render(await wrap(<Dashboard />))
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
 
     await waitFor(() => expect(screen.getByText('4 checks')).toBeInTheDocument())
@@ -71,7 +76,7 @@ describe('Dashboard', () => {
 
   it('renders the empty state when no checks are returned', async () => {
     vi.spyOn(api, 'listChecks').mockResolvedValue({ checks: [] })
-    render(wrap(<Dashboard />))
+    render(await wrap(<Dashboard />))
     await waitFor(() =>
       expect(
         screen.getByText(/No checks declared\. Add them in your config file\./i),
@@ -82,7 +87,7 @@ describe('Dashboard', () => {
 
   it('shows an error banner with the message when the query fails', async () => {
     vi.spyOn(api, 'listChecks').mockRejectedValue(new Error('boom'))
-    render(wrap(<Dashboard />))
+    render(await wrap(<Dashboard />))
     await waitFor(() => expect(screen.getByText(/Couldn't load checks/)).toBeInTheDocument())
     expect(screen.getByText(/boom/)).toBeInTheDocument()
   })
@@ -97,7 +102,7 @@ describe('Dashboard', () => {
       value: { ...window.location, reload },
     })
 
-    render(wrap(<Dashboard />))
+    render(await wrap(<Dashboard />))
     await waitFor(() => expect(screen.getByText('0 checks')).toBeInTheDocument())
 
     const user = userEvent.setup()
@@ -116,7 +121,7 @@ describe('Dashboard', () => {
       value: { ...window.location, reload },
     })
 
-    render(wrap(<Dashboard />))
+    render(await wrap(<Dashboard />))
     await waitFor(() => expect(screen.getByText(/Couldn't load checks/)).toBeInTheDocument())
 
     const user = userEvent.setup()

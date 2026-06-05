@@ -1,19 +1,16 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { getPing, type PingDetail } from '../api'
-import { AuthGate } from '../components/AuthGate'
 
+// Auth is handled by the /checks/$slug layout (checks.$slug.tsx), so
+// the leaf doesn't re-wrap in AuthGate.
 export const Route = createFileRoute('/checks/$slug/pings/$pingId')({
   component: RouteComponent,
 })
 
 function RouteComponent() {
   const { slug, pingId } = Route.useParams()
-  return (
-    <AuthGate>
-      <PingDetailPage slug={slug} pingId={pingId} />
-    </AuthGate>
-  )
+  return <PingDetailPage slug={slug} pingId={pingId} />
 }
 
 export function PingDetailPage({ slug, pingId }: { slug: string; pingId: string }) {

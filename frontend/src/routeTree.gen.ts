@@ -14,6 +14,7 @@ import { Route as CallbackRouteImport } from './routes/callback'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TagsTagRouteImport } from './routes/tags.$tag'
 import { Route as ChecksSlugRouteImport } from './routes/checks.$slug'
+import { Route as ChecksSlugIndexRouteImport } from './routes/checks.$slug.index'
 import { Route as ChecksSlugPingsPingIdRouteImport } from './routes/checks.$slug.pings.$pingId'
 
 const TagsRoute = TagsRouteImport.update({
@@ -41,6 +42,11 @@ const ChecksSlugRoute = ChecksSlugRouteImport.update({
   path: '/checks/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ChecksSlugIndexRoute = ChecksSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ChecksSlugRoute,
+} as any)
 const ChecksSlugPingsPingIdRoute = ChecksSlugPingsPingIdRouteImport.update({
   id: '/pings/$pingId',
   path: '/pings/$pingId',
@@ -53,14 +59,15 @@ export interface FileRoutesByFullPath {
   '/tags': typeof TagsRouteWithChildren
   '/checks/$slug': typeof ChecksSlugRouteWithChildren
   '/tags/$tag': typeof TagsTagRoute
+  '/checks/$slug/': typeof ChecksSlugIndexRoute
   '/checks/$slug/pings/$pingId': typeof ChecksSlugPingsPingIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
   '/tags': typeof TagsRouteWithChildren
-  '/checks/$slug': typeof ChecksSlugRouteWithChildren
   '/tags/$tag': typeof TagsTagRoute
+  '/checks/$slug': typeof ChecksSlugIndexRoute
   '/checks/$slug/pings/$pingId': typeof ChecksSlugPingsPingIdRoute
 }
 export interface FileRoutesById {
@@ -70,6 +77,7 @@ export interface FileRoutesById {
   '/tags': typeof TagsRouteWithChildren
   '/checks/$slug': typeof ChecksSlugRouteWithChildren
   '/tags/$tag': typeof TagsTagRoute
+  '/checks/$slug/': typeof ChecksSlugIndexRoute
   '/checks/$slug/pings/$pingId': typeof ChecksSlugPingsPingIdRoute
 }
 export interface FileRouteTypes {
@@ -80,14 +88,15 @@ export interface FileRouteTypes {
     | '/tags'
     | '/checks/$slug'
     | '/tags/$tag'
+    | '/checks/$slug/'
     | '/checks/$slug/pings/$pingId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/callback'
     | '/tags'
-    | '/checks/$slug'
     | '/tags/$tag'
+    | '/checks/$slug'
     | '/checks/$slug/pings/$pingId'
   id:
     | '__root__'
@@ -96,6 +105,7 @@ export interface FileRouteTypes {
     | '/tags'
     | '/checks/$slug'
     | '/tags/$tag'
+    | '/checks/$slug/'
     | '/checks/$slug/pings/$pingId'
   fileRoutesById: FileRoutesById
 }
@@ -143,6 +153,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChecksSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/checks/$slug/': {
+      id: '/checks/$slug/'
+      path: '/'
+      fullPath: '/checks/$slug/'
+      preLoaderRoute: typeof ChecksSlugIndexRouteImport
+      parentRoute: typeof ChecksSlugRoute
+    }
     '/checks/$slug/pings/$pingId': {
       id: '/checks/$slug/pings/$pingId'
       path: '/pings/$pingId'
@@ -164,10 +181,12 @@ const TagsRouteChildren: TagsRouteChildren = {
 const TagsRouteWithChildren = TagsRoute._addFileChildren(TagsRouteChildren)
 
 interface ChecksSlugRouteChildren {
+  ChecksSlugIndexRoute: typeof ChecksSlugIndexRoute
   ChecksSlugPingsPingIdRoute: typeof ChecksSlugPingsPingIdRoute
 }
 
 const ChecksSlugRouteChildren: ChecksSlugRouteChildren = {
+  ChecksSlugIndexRoute: ChecksSlugIndexRoute,
   ChecksSlugPingsPingIdRoute: ChecksSlugPingsPingIdRoute,
 }
 

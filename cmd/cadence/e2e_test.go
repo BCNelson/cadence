@@ -202,7 +202,7 @@ func setupE2E(t *testing.T) *e2eHarness {
 	t.Cleanup(func() { _ = eng.Close() })
 
 	mux := http.NewServeMux()
-	registerRoutes(mux, reg, eng, st, bus)
+	registerRoutes(mux, reg, eng, st, bus, nil)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 

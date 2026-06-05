@@ -141,7 +141,7 @@ checks:
 	t.Cleanup(func() { _ = eng.Close() })
 
 	mux := http.NewServeMux()
-	registerRoutes(mux, reg, eng, st, bus)
+	registerRoutes(mux, reg, eng, st, bus, nil)
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

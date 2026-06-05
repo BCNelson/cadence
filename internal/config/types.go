@@ -30,6 +30,20 @@ type Server struct {
 	UUIDSalt  string    `yaml:"uuid_salt"`
 	APIKeys   APIKeys   `yaml:"api_keys"`
 	RateLimit RateLimit `yaml:"rate_limit"`
+	OIDC      OIDC      `yaml:"oidc"`
+}
+
+// OIDC configures Bearer-token auth from an external identity provider.
+// When Issuer is empty, OIDC is disabled and only API-key auth applies.
+//
+// Tier ("read_write" | "read_only") is the permission level granted to any
+// successfully-authenticated user; v1 does not map claims to tiers.
+// Audience defaults to ClientID when empty.
+type OIDC struct {
+	Issuer   string `yaml:"issuer"`
+	ClientID string `yaml:"client_id"`
+	Audience string `yaml:"audience"`
+	Tier     string `yaml:"tier"`
 }
 
 // RateLimit caps inbound /ping/ requests so a misconfigured client (or a

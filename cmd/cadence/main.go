@@ -117,8 +117,10 @@ func run(paths []string) error {
 		}
 	}()
 
+	oidcV := api.NewOIDCVerifier(reg.Server.OIDC)
+
 	mux := http.NewServeMux()
-	registerRoutes(mux, reg, eng, st, bus)
+	registerRoutes(mux, reg, eng, st, bus, oidcV)
 
 	listen := reg.Server.Listen
 	if listen == "" {
@@ -164,21 +166,21 @@ func run(paths []string) error {
 
 // registerRoutes mounts every HTTP surface on mux. Ordering is incidental
 // — the Go 1.22+ ServeMux dispatches by pattern specificity.
-func registerRoutes(mux *http.ServeMux, reg *config.Registry, eng *engine.Engine, st *store.Store, bus *sse.Bus) {
+func registerRoutes(mux *http.ServeMux, reg *config.Registry, eng *engine.Engine, st *store.Store, bus *sse.Bus, ov *api.OIDCVerifier) {
 	pingH := api.NewPingHandler(reg, eng, st)
 	for _, r := range pingH.Routes() {
 		mux.HandleFunc(r.Pattern, r.Handler)
 	}
 
-	mgmtH := api.NewMgmtHandler(reg, eng, st)
+	mgmtH := api.NewMgmtHandler(reg, eng, st, ov)
 	for _, r := range mgmtH.Routes() {
 		mux.HandleFunc(r.Pattern, r.Handler)
 	}
 
-	// SSE shares the management API's key allow-list. Browser EventSource
-	// can't set headers, so api.Authenticate also accepts ?api_key= as a
-	// query-string fallback.
-	mux.Handle("/events", api.RequireKey(reg, bus.Handler()))
+	// SSE shares the management API's auth surface. Browser EventSource
+	// can't set headers, so api.Authenticate also accepts ?api_key= /
+	// ?access_token= as query-string fallbacks.
+	mux.Handle("/events", api.RequireKey(reg, ov, bus.Handler()))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

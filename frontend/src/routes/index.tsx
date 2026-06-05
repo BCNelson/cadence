@@ -1,15 +1,16 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { listChecks, clearApiKey, type Check, type CheckStatus } from '../api'
+import { listChecks, clearApiKey, getAuthMode, type Check, type CheckStatus } from '../api'
 import { useTransitionStream } from '../sse'
 import { CheckRow } from '../components/CheckRow'
-import { ApiKeyGate } from '../components/ApiKeyGate'
+import { AuthGate } from '../components/AuthGate'
+import { useAuth } from 'react-oidc-context'
 
 export const Route = createFileRoute('/')({
   component: () => (
-    <ApiKeyGate>
+    <AuthGate>
       <Dashboard />
-    </ApiKeyGate>
+    </AuthGate>
   ),
 })
 
@@ -55,16 +56,7 @@ export function Dashboard() {
           <h1 className="text-2xl font-bold text-slate-900">cadence</h1>
           <p className="text-sm text-slate-600">{checks.length} checks</p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            clearApiKey()
-            window.location.reload()
-          }}
-          className="text-xs text-slate-500 hover:text-slate-900"
-        >
-          Sign out
-        </button>
+        <SignOutButton />
       </header>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -96,6 +88,38 @@ export function Dashboard() {
   )
 }
 
+// SignOutButton dispatches the right sign-out for the active auth mode.
+// The OIDC branch only renders when AuthProvider is mounted (i.e. the SPA
+// discovered OIDC at boot), so useAuth is safe to call there.
+function SignOutButton() {
+  if (getAuthMode() === 'oidc') return <OidcSignOutButton />
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        clearApiKey()
+        window.location.reload()
+      }}
+      className="text-xs text-slate-500 hover:text-slate-900"
+    >
+      Sign out
+    </button>
+  )
+}
+
+function OidcSignOutButton() {
+  const auth = useAuth()
+  return (
+    <button
+      type="button"
+      onClick={() => void auth.removeUser()}
+      className="text-xs text-slate-500 hover:text-slate-900"
+    >
+      Sign out
+    </button>
+  )
+}
+
 function Loading() {
   return (
     <main className="flex min-h-screen items-center justify-center text-slate-500">
@@ -109,18 +133,20 @@ function ErrorBanner({ message }: { message: string }) {
     <main className="mx-auto max-w-3xl px-4 py-8">
       <div className="rounded border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
         <strong>Couldn't load checks:</strong> {message}
-        <div className="mt-2">
-          <button
-            type="button"
-            onClick={() => {
-              clearApiKey()
-              window.location.reload()
-            }}
-            className="text-xs underline"
-          >
-            Reset API key
-          </button>
-        </div>
+        {getAuthMode() === 'apikey' && (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => {
+                clearApiKey()
+                window.location.reload()
+              }}
+              className="text-xs underline"
+            >
+              Reset API key
+            </button>
+          </div>
+        )}
       </div>
     </main>
   )

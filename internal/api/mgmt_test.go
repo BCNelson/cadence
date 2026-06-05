@@ -44,7 +44,7 @@ func newMgmtHarness(t *testing.T, yaml string) *mgmtHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = eng.Close() })
-	mh := NewMgmtHandler(reg, eng, st)
+	mh := NewMgmtHandler(reg, eng, st, nil)
 	mux := http.NewServeMux()
 	for _, r := range mh.Routes() {
 		mux.HandleFunc(r.Pattern, r.Handler)

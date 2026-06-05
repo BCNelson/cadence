@@ -27,14 +27,16 @@ type MgmtHandler struct {
 	registry *config.Registry
 	engine   *engine.Engine
 	store    *store.Store
-	cronP    cron.Parser // for computing next_ping on cron-based checks
+	oidc     *OIDCVerifier // nil when OIDC is not configured
+	cronP    cron.Parser   // for computing next_ping on cron-based checks
 }
 
-func NewMgmtHandler(reg *config.Registry, eng *engine.Engine, st *store.Store) *MgmtHandler {
+func NewMgmtHandler(reg *config.Registry, eng *engine.Engine, st *store.Store, ov *OIDCVerifier) *MgmtHandler {
 	return &MgmtHandler{
 		registry: reg,
 		engine:   eng,
 		store:    st,
+		oidc:     ov,
 		cronP:    cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }
@@ -51,6 +53,9 @@ func (h *MgmtHandler) Routes() []Route {
 		{Pattern: "GET /api/v3/checks/{id}/pings/", Handler: h.pingsForCheck},
 		{Pattern: "GET /api/v3/channels/", Handler: h.listChannels},
 		{Pattern: "GET /api/v3/badges/", Handler: h.listBadges},
+		// /api/v3/auth/config is public: the SPA reads it pre-login to
+		// decide whether to drive OIDC or fall back to the API-key gate.
+		{Pattern: "GET /api/v3/auth/config", Handler: h.authConfig},
 
 		// Writes — all return 409.
 		{Pattern: "POST /api/v3/checks/", Handler: h.writeRejected("create")},
@@ -62,9 +67,9 @@ func (h *MgmtHandler) Routes() []Route {
 }
 
 func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
-	kind := Authenticate(h.registry, r)
+	kind := Authenticate(h.registry, h.oidc, r)
 	if kind == KeyNone {
-		writeAuthChallenge(w)
+		writeAuthChallenge(w, h.oidc)
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -79,9 +84,9 @@ func (h *MgmtHandler) listChecks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MgmtHandler) getCheck(w http.ResponseWriter, r *http.Request) {
-	kind := Authenticate(h.registry, r)
+	kind := Authenticate(h.registry, h.oidc, r)
 	if kind == KeyNone {
-		writeAuthChallenge(w)
+		writeAuthChallenge(w, h.oidc)
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -121,8 +126,8 @@ func (h *MgmtHandler) resolveCheck(id string) (*config.ResolvedCheck, error) {
 // not supported because configuration is the source of truth.
 func (h *MgmtHandler) writeRejected(op string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if Authenticate(h.registry, r) == KeyNone {
-			writeAuthChallenge(w)
+		if Authenticate(h.registry, h.oidc, r) == KeyNone {
+			writeAuthChallenge(w, h.oidc)
 			writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 			return
 		}
@@ -290,8 +295,8 @@ type flipView struct {
 
 // flipsForCheck handles GET /api/v3/checks/{id}/flips/.
 func (h *MgmtHandler) flipsForCheck(w http.ResponseWriter, r *http.Request) {
-	if Authenticate(h.registry, r) == KeyNone {
-		writeAuthChallenge(w)
+	if Authenticate(h.registry, h.oidc, r) == KeyNone {
+		writeAuthChallenge(w, h.oidc)
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -357,8 +362,8 @@ type pingView struct {
 
 // pingsForCheck handles GET /api/v3/checks/{id}/pings/.
 func (h *MgmtHandler) pingsForCheck(w http.ResponseWriter, r *http.Request) {
-	if Authenticate(h.registry, r) == KeyNone {
-		writeAuthChallenge(w)
+	if Authenticate(h.registry, h.oidc, r) == KeyNone {
+		writeAuthChallenge(w, h.oidc)
 		writeAPIError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key")
 		return
 	}
@@ -411,8 +416,8 @@ type channelView struct {
 // channel definitions carry webhook URLs and similar; read-only viewers
 // don't need to enumerate them.
 func (h *MgmtHandler) listChannels(w http.ResponseWriter, r *http.Request) {
-	if Authenticate(h.registry, r) != KeyReadWrite {
-		writeAuthChallenge(w)
+	if Authenticate(h.registry, h.oidc, r) != KeyReadWrite {
+		writeAuthChallenge(w, h.oidc)
 		writeAPIError(w, http.StatusUnauthorized, "channels require a read-write X-Api-Key")
 		return
 	}
@@ -431,6 +436,25 @@ type badgeURLs struct {
 	JSON    string `json:"json"`
 	JSON3   string `json:"json3"`
 	Shields string `json:"shields"`
+}
+
+// authConfig handles GET /api/v3/auth/config. Public (no auth) — the SPA
+// reads this once at boot to decide whether to render the API-key gate or
+// drive an OIDC sign-in. All exposed fields are non-secret (the OIDC flow
+// is auth-code + PKCE with a public client).
+func (h *MgmtHandler) authConfig(w http.ResponseWriter, _ *http.Request) {
+	cfg, ok := h.oidc.PublicConfig()
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"oidc": nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"oidc": map[string]string{
+			"issuer":    cfg.Issuer,
+			"client_id": cfg.ClientID,
+			"audience":  cfg.Audience,
+		},
+	})
 }
 
 // listBadges handles GET /api/v3/badges/. Public (no auth) to match HC.io's

@@ -23,10 +23,12 @@
     "@tanstack/react-query": "^5.99.1",
     "@tanstack/react-router": "^1.168.23",
     "lucide-react": "^1.8.0",
+    "oidc-client-ts": "^3.5.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-hook-form": "^7.72.1",
     "react-markdown": "^10.1.0",
+    "react-oidc-context": "^3.3.1",
     "remark-gfm": "^4.0.1",
     "zod": "^4.3.6"
   },

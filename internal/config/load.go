@@ -82,6 +82,16 @@ func resolve(cfg *Config) (*Registry, error) {
 	if cfg.Server.UUIDSalt == "" {
 		return nil, errors.New("config: server.uuid_salt is required")
 	}
+	if cfg.Server.OIDC.Issuer != "" {
+		if cfg.Server.OIDC.ClientID == "" {
+			return nil, errors.New("config: server.oidc.client_id is required when server.oidc.issuer is set")
+		}
+		switch cfg.Server.OIDC.Tier {
+		case "", "read_write", "read_only":
+		default:
+			return nil, fmt.Errorf("config: server.oidc.tier must be \"read_write\" or \"read_only\", got %q", cfg.Server.OIDC.Tier)
+		}
+	}
 
 	reg := &Registry{
 		Server:    cfg.Server,

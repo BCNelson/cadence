@@ -63,7 +63,7 @@ func TestAuthenticate(t *testing.T) {
 			if tc.header != "" {
 				r.Header.Set("X-Api-Key", tc.header)
 			}
-			if got := Authenticate(reg, r); got != tc.want {
+			if got := Authenticate(reg, nil, r); got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -76,7 +76,7 @@ func TestRequireKey(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mw := RequireKey(reg, inner)
+	mw := RequireKey(reg, nil, inner)
 
 	cases := []struct {
 		name   string

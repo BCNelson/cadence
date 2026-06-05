@@ -19,7 +19,7 @@ let
     nodejs = nodejs_22;
 
     # Recompute with `nix build .#cadence` and copy the suggested hash.
-    npmDepsHash = "sha256-rMB3W+LZOHM/GBenk72pnNfB1LBDeuljYRKz/GPE0CQ=";
+    npmDepsHash = "sha256-CIIFQ4B+aRK2I3UcC89JJ+k2+qah3xqsWGVWwjysH0M=";
 
     # Playwright is only needed for e2e tests; skip browser download during
     # the package install so the build stays hermetic.
@@ -40,7 +40,7 @@ buildGoModule {
   inherit src;
 
   # Recompute with `nix build .#cadence` and copy the suggested hash.
-  vendorHash = "sha256-PJsCOi9NmXfzzmI5rlv0iRZaCraFGP07iav4Y4NIg8E=";
+  vendorHash = "sha256-dFY5121jqOntFTAimg2hC1ZXrJjDxuGONluEBV1EC8s=";
 
   subPackages = [ "cmd/cadence" ];
 

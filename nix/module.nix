@@ -34,6 +34,47 @@ let
     };
   };
 
+  oidcType = lib.types.submodule {
+    options = {
+      issuer = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "https://idp.example.com";
+        description = ''
+          OIDC discovery URL. Setting this turns on Bearer-token auth for
+          the management API (in addition to API keys). Leave null to
+          disable OIDC entirely.
+        '';
+      };
+      client_id = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "cadence-ui";
+        description = ''
+          OIDC client ID. Required when {option}`issuer` is set. The SPA
+          uses this for auth-code + PKCE; cadence verifies the token's
+          `aud` against {option}`audience` (defaulting to this value).
+        '';
+      };
+      audience = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Expected `aud` claim. Defaults to {option}`client_id` when null.
+        '';
+      };
+      tier = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum [ "read_write" "read_only" ]);
+        default = null;
+        description = ''
+          Permission tier granted to every successfully-authenticated OIDC
+          user. v1 does not map per-user claims to tiers. Defaults to
+          `read_write` at the daemon when null.
+        '';
+      };
+    };
+  };
+
   serverType = lib.types.submodule {
     options = {
       listen = lib.mkOption {
@@ -62,6 +103,16 @@ let
         type = apiKeysType;
         default = { };
         description = "Management API authentication.";
+      };
+      oidc = lib.mkOption {
+        type = oidcType;
+        default = { };
+        description = ''
+          Optional OIDC SSO for the management API and embedded SPA. Empty
+          (default) disables OIDC and only API keys are accepted. Set
+          {option}`issuer` and {option}`client_id` to enable; HC.io-style
+          `X-Api-Key` automation keeps working in parallel.
+        '';
       };
     };
   };
@@ -413,6 +464,9 @@ in
               "check \"${c.slug}\" must specify exactly one of `period` or `cron`."
           )
           cfg.settings.checks);
+        oidc = cfg.settings.server.oidc;
+        oidcIssuerSet = oidc.issuer != null && oidc.issuer != "";
+        oidcClientIDSet = oidc.client_id != null && oidc.client_id != "";
       in
       [
         {
@@ -442,6 +496,12 @@ in
         {
           assertion = periodCronErrors == [ ];
           message = "services.cadence.settings: " + lib.concatStringsSep "; " periodCronErrors;
+        }
+        {
+          # Mirror the Go-side validation so misconfiguration fails at
+          # `nixos-rebuild build` instead of daemon startup.
+          assertion = !oidcIssuerSet || oidcClientIDSet;
+          message = "services.cadence.settings.server.oidc: client_id is required when issuer is set.";
         }
       ];
 

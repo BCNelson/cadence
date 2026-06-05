@@ -134,6 +134,36 @@ let
         };
       };
     };
+
+    oidc-issuer-without-client-id = {
+      services.cadence = {
+        enable = true;
+        settings = {
+          server = {
+            uuid_salt = "x";
+            oidc.issuer = "https://idp.example/";
+          };
+          checks = [{ slug = "x"; period = "5m"; }];
+        };
+      };
+    };
+
+    oidc-bad-tier = {
+      services.cadence = {
+        enable = true;
+        settings = {
+          server = {
+            uuid_salt = "x";
+            oidc = {
+              issuer = "https://idp.example/";
+              client_id = "cli";
+              tier = "admin"; # not in the enum
+            };
+          };
+          checks = [{ slug = "x"; period = "5m"; }];
+        };
+      };
+    };
   };
 
   results = lib.mapAttrs (name: cfg:

@@ -38,6 +38,14 @@ pkgs.testers.runNixOSTest {
         server = {
           uuid_salt = "\${env:CADENCE_UUID_SALT}";
           api_keys.read_only = [ "test-ro-key" ];
+          # OIDC is wired up but points at an unreachable issuer — the
+          # verifier inits lazily, so the daemon still starts and the
+          # discovery endpoint reflects the configured fields. The VM has
+          # no real IdP; the Go e2e suite covers the live-token path.
+          oidc = {
+            issuer = "https://idp.unreachable.invalid/";
+            client_id = "cadence-ui";
+          };
         };
         retention = { pings = 10; events = 10; };
         checks = [
@@ -81,6 +89,27 @@ pkgs.testers.runNixOSTest {
     )
     assert "from-settings" in out, f"missing 'from-settings' check: {out!r}"
     assert "from-extra-file" in out, f"missing 'from-extra-file' check: {out!r}"
+
+    # OIDC discovery endpoint reflects the typed config and is public
+    # (no API key required). This proves the Server.OIDC field flowed
+    # from Nix → YAML → daemon without dropping anything.
+    auth_cfg = machine.succeed(
+        "curl -fsS http://127.0.0.1:8765/api/v3/auth/config"
+    )
+    assert '"issuer":"https://idp.unreachable.invalid/"' in auth_cfg, \
+        f"auth/config missing issuer: {auth_cfg!r}"
+    assert '"client_id":"cadence-ui"' in auth_cfg, \
+        f"auth/config missing client_id: {auth_cfg!r}"
+
+    # 401 challenge advertises both schemes when OIDC is configured —
+    # this is the signal HC.io-style automation needs to keep working
+    # alongside the OIDC SPA.
+    challenge = machine.succeed(
+        "curl -sS -o /dev/null -D - http://127.0.0.1:8765/api/v3/checks/ "
+        "| grep -i '^www-authenticate:'"
+    )
+    assert "Bearer" in challenge and "CadenceApiKey" in challenge, \
+        f"WWW-Authenticate missing one of Bearer / CadenceApiKey: {challenge!r}"
 
     # systemd hardening sanity: confirm a few of the load-bearing knobs are
     # actually applied (catches accidental regressions from option churn).

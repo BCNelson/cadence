@@ -9,7 +9,7 @@ import {
   type Check,
   type CheckStatus,
 } from '../api'
-import { useTransitionStream } from '../sse'
+import { TransitionStream } from '../components/TransitionStream'
 import { CheckRow } from '../components/CheckRow'
 import { AuthGate } from '../components/AuthGate'
 import { useAuth } from 'react-oidc-context'
@@ -49,7 +49,6 @@ function compareChecks(a: Check, b: Check): number {
 }
 
 export function Dashboard() {
-  useTransitionStream()
   // strict:false lets the Dashboard component render outside of the index
   // route match (e.g. in unit tests) — it returns {} in that case.
   const search = useSearch({ strict: false }) as DashboardSearch
@@ -92,6 +91,7 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
+      <TransitionStream />
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">cadence</h1>

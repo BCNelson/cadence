@@ -103,18 +103,6 @@ function authHeader(): Record<string, string> {
   return { 'X-Api-Key': k }
 }
 
-// eventsURL builds the URL for the SSE stream. EventSource cannot set
-// headers, so the credential rides as a query parameter in either mode.
-// Returns null when no credential is available (caller should skip).
-export function eventsURL(): string | null {
-  if (authMode === 'oidc') {
-    const t = bearerProvider()
-    return t ? `/events?access_token=${encodeURIComponent(t)}` : null
-  }
-  const k = getApiKey()
-  return k ? `/events?api_key=${encodeURIComponent(k)}` : null
-}
-
 // fetchJson sends an authenticated request and unwraps the JSON body.
 // Throws on non-2xx so TanStack Query's error state can surface it.
 async function fetchJson<T>(path: string): Promise<T> {

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { getCheck, getPingsForCheck, type Ping } from '../api'
-import { useTransitionStream } from '../sse'
+import { TransitionStream } from '../components/TransitionStream'
 import { StatusBadge } from '../components/StatusBadge'
 
 export const Route = createFileRoute('/checks/$slug/')({
@@ -14,8 +14,6 @@ function RouteComponent() {
 }
 
 export function CheckDetail({ slug }: { slug: string }) {
-  useTransitionStream()
-
   const checkQ = useQuery({
     queryKey: ['checks', slug],
     queryFn: () => getCheck(slug),
@@ -38,6 +36,7 @@ export function CheckDetail({ slug }: { slug: string }) {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
+      <TransitionStream />
       <header className="mb-6">
         <Link to="/" className="text-xs text-slate-500 hover:text-slate-900">
           ← All checks

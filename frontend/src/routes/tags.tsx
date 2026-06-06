@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { listTags } from '../api'
-import { useTransitionStream } from '../sse'
+import { TransitionStream } from '../components/TransitionStream'
 import { AuthGate } from '../components/AuthGate'
 import { StatusBadge } from '../components/StatusBadge'
 
@@ -14,7 +14,6 @@ export const Route = createFileRoute('/tags')({
 })
 
 function TagsIndex() {
-  useTransitionStream()
   const { data, isLoading, error } = useQuery({
     queryKey: ['tags'],
     queryFn: listTags,
@@ -29,6 +28,7 @@ function TagsIndex() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
+      <TransitionStream />
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Tags</h1>

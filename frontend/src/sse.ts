@@ -1,18 +1,26 @@
 // Live updates via Server-Sent Events. The bus publishes a `transition`
-// event for every state change; on receipt we invalidate the checks
-// query so TanStack Query refetches and re-renders.
+// event for every state change; on receipt we invalidate the checks and
+// tags queries so TanStack Query refetches and re-renders.
+//
+// The hook keys off the live credential so an EventSource is opened the
+// moment the credential becomes available (avoiding a first-mount race
+// against the OIDC TokenBridge) and replaced when the credential
+// changes (covering silent OIDC token renewal — otherwise the connection
+// reconnects with a stale token and the IdP rejects it).
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { eventsURL } from './api'
+import { getAuthMode } from './api'
 
-export function useTransitionStream(): void {
+export function eventsURL(credential: string): string {
+  const param = getAuthMode() === 'oidc' ? 'access_token' : 'api_key'
+  return `/events?${param}=${encodeURIComponent(credential)}`
+}
+
+export function useTransitionStream(credential: string | null): void {
   const qc = useQueryClient()
   useEffect(() => {
-    // EventSource can't set headers, so the credential rides as a query
-    // parameter (api_key= in API-key mode, access_token= in OIDC mode).
-    const url = eventsURL()
-    if (!url) return
-    const es = new EventSource(url)
+    if (!credential) return
+    const es = new EventSource(eventsURL(credential))
     const onTransition = (): void => {
       // Don't try to merge the patch into the cache by hand — the read
       // API is authoritative (status, last_ping, next_ping all change),
@@ -27,5 +35,5 @@ export function useTransitionStream(): void {
       es.removeEventListener('transition', onTransition)
       es.close()
     }
-  }, [qc])
+  }, [credential, qc])
 }

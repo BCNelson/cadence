@@ -273,3 +273,34 @@ func TestSSEPublishNilSafe(t *testing.T) {
 	bus := NewBus()
 	bus.Publish(nil) // must not panic
 }
+
+// TestSSEHeartbeat verifies the handler writes an SSE comment line on its
+// heartbeat ticker even when no transitions are published, so idle
+// connections aren't torn down by proxies / browser idle detection.
+func TestSSEHeartbeat(t *testing.T) {
+	bus := NewBus(WithHeartbeatInterval(20 * time.Millisecond))
+	srv := httptest.NewServer(bus.Handler())
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL, http.NoBody)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	br := bufio.NewReader(resp.Body)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if strings.HasPrefix(line, ":") {
+			return
+		}
+	}
+	t.Error("no heartbeat comment line received within deadline (no Publish was called)")
+}

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bcnelson/cadence/internal/engine"
 )
@@ -24,6 +25,12 @@ const (
 	// not tiny — bursty transitions (e.g. config reload that flips many
 	// checks at once) shouldn't immediately blow past it.
 	subscriberQueueDepth = 32
+
+	// defaultHeartbeatInterval is how often Handler writes an SSE comment
+	// line to an otherwise idle connection. Sits comfortably under common
+	// proxy / browser idle timeouts (often 60s) so silent streams don't
+	// get torn down between transitions.
+	defaultHeartbeatInterval = 20 * time.Second
 )
 
 // Bus is an in-memory pub/sub for transitions. Safe for concurrent use.
@@ -35,10 +42,28 @@ type Bus struct {
 	// transition. Clients use it to detect gaps after a `missed` event
 	// and refetch only the affected window from the read API.
 	seq atomic.Uint64
+
+	heartbeatInterval time.Duration
 }
 
-func NewBus() *Bus {
-	return &Bus{subs: make(map[*subscription]struct{})}
+// Option customizes a Bus at construction.
+type Option func(*Bus)
+
+// WithHeartbeatInterval overrides how often Handler writes an SSE keepalive
+// comment. Primarily for tests; production should use the default.
+func WithHeartbeatInterval(d time.Duration) Option {
+	return func(b *Bus) { b.heartbeatInterval = d }
+}
+
+func NewBus(opts ...Option) *Bus {
+	b := &Bus{
+		subs:              make(map[*subscription]struct{}),
+		heartbeatInterval: defaultHeartbeatInterval,
+	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // envelope is what the bus enqueues for each subscriber: the transition
@@ -147,11 +172,21 @@ func (b *Bus) Handler() http.HandlerFunc {
 		s := b.subscribe()
 		defer b.unsubscribe(s)
 
+		// Heartbeat: SSE comment lines (starting with ":") are ignored by
+		// EventSource but keep the TCP connection warm so proxies and
+		// browser idle detection don't tear down a silent stream between
+		// transitions.
+		ticker := time.NewTicker(b.heartbeatInterval)
+		defer ticker.Stop()
+
 		ctx := r.Context()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-ticker.C:
+				_, _ = fmt.Fprint(w, ": keepalive\n\n")
+				flusher.Flush()
 			case env, ok := <-s.ch:
 				if !ok {
 					return

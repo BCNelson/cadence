@@ -87,7 +87,7 @@ describe('useTransitionStream', () => {
     const qc = new QueryClient()
     const { rerender } = renderHook(
       ({ token }: { token: string | null }) => useTransitionStream(token),
-      { wrapper: wrapper(qc), initialProps: { token: null } },
+      { wrapper: wrapper(qc), initialProps: { token: null as string | null } },
     )
     expect(FakeEventSource.instances).toHaveLength(0)
 
@@ -103,7 +103,7 @@ describe('useTransitionStream', () => {
     const qc = new QueryClient()
     const { rerender } = renderHook(
       ({ token }: { token: string | null }) => useTransitionStream(token),
-      { wrapper: wrapper(qc), initialProps: { token: 'first' } },
+      { wrapper: wrapper(qc), initialProps: { token: 'first' as string | null } },
     )
     expect(FakeEventSource.instances).toHaveLength(1)
     const first = FakeEventSource.instances[0]
